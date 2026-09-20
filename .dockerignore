@@ -8,7 +8,7 @@ __pycache__/
 .git/
 .gitignore
 .github/
-alembic/
+alembic/__pycache__/
 monitoring/
 docker-compose*.yml
 Dockerfile
