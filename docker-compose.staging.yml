@@ -1,0 +1,56 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6381:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    restart: unless-stopped
+    ports:
+      - "5673:5672"
+      - "15673:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: timmy
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-timmy_staging_password}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      SECRET_KEY: ${SECRET_KEY}
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://timmy:${RABBITMQ_PASSWORD:-timmy_staging_password}@rabbitmq:5672/
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-noreply@trimmy.com}
+      CLIENT_URL: ${CLIENT_URL:-https://api.sandbox.trimmy.com}
+      CORS_ORIGINS: ${CORS_ORIGINS:-'["https://api.sandbox.trimmy.com"]'}
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"
+
+volumes:
+  redis_data:
+  rabbitmq_data:

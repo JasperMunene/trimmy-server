@@ -1,0 +1,39 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches: [sandbox]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.STAGING_SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /opt/trimmy-staging
+            git fetch origin sandbox
+            git reset --hard origin/sandbox
+
+            cat > .env <<EOF
+            DATABASE_URL=${{ secrets.DATABASE_URL }}
+            SECRET_KEY=${{ secrets.SECRET_KEY }}
+            REDIS_URL=redis://redis:6379/0
+            RABBITMQ_PASSWORD=${{ secrets.RABBITMQ_PASSWORD }}
+            RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
+            RESEND_FROM_EMAIL=${{ secrets.RESEND_FROM_EMAIL }}
+            CLIENT_URL=${{ secrets.CLIENT_URL }}
+            CORS_ORIGINS=${{ secrets.CORS_ORIGINS }}
+            EOF
+
+            docker compose -f docker-compose.staging.yml down
+            docker compose -f docker-compose.staging.yml up -d --build
+
+            sleep 8
+            docker compose -f docker-compose.staging.yml ps
+
+            echo "=== Staging deploy complete ==="

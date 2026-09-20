@@ -1,0 +1,99 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: timmy
+      POSTGRES_PASSWORD: timmy_dev_password
+      POSTGRES_DB: timmy
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U timmy -d timmy"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: timmy
+      RABBITMQ_DEFAULT_PASS: timmy_dev_password
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://timmy:timmy_dev_password@db:5432/timmy
+      SECRET_KEY: dev-secret-key-change-in-production
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://timmy:timmy_dev_password@rabbitmq:5672/
+      RESEND_API_KEY: ""
+      RESEND_FROM_EMAIL: noreply@trimmy.com
+      CLIENT_URL: http://localhost:8081
+      CORS_ORIGINS: '["http://localhost:8081","http://localhost:19006"]'
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  prometheus_data:
+  grafana_data:
