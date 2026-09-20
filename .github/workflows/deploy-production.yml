@@ -38,3 +38,4 @@ jobs:
             docker compose -f docker-compose.prod.yml ps
 
             echo "=== Production deploy complete ==="
+            curl -s http://localhost:8002/health

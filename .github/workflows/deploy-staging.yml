@@ -38,3 +38,4 @@ jobs:
             docker compose -f docker-compose.staging.yml ps
 
             echo "=== Staging deploy complete ==="
+            curl -s http://localhost:8001/health
