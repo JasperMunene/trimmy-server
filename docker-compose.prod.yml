@@ -35,7 +35,7 @@ services:
     ports:
       - "8002:8000"
     environment:
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://trimmy_app:trimmy@2026@pg-server:5432/trimmy_prod}
       SECRET_KEY: ${SECRET_KEY}
       REDIS_URL: redis://redis:6379/0
       RABBITMQ_URL: amqp://timmy:${RABBITMQ_PASSWORD:-timmy_prod_password}@rabbitmq:5672/
@@ -50,7 +50,17 @@ services:
         condition: service_healthy
     command: >
       sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"
+    networks:
+      - default
+      - pg-net
 
 volumes:
   redis_data:
   rabbitmq_data:
+
+networks:
+  default:
+    name: trimmy-prod
+  pg-net:
+    external: true
+    name: pg-server_db_network
