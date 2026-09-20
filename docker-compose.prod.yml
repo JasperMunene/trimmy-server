@@ -35,14 +35,14 @@ services:
     ports:
       - "8002:8000"
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://trimmy_app:trimmy@2026@pg-server:5432/trimmy_prod}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://trimmy_app:trimmy@2026@host.docker.internal:5433/trimmy_prod}
       SECRET_KEY: ${SECRET_KEY}
       REDIS_URL: redis://redis:6379/0
       RABBITMQ_URL: amqp://timmy:${RABBITMQ_PASSWORD:-timmy_prod_password}@rabbitmq:5672/
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-noreply@trimmy.com}
       CLIENT_URL: ${CLIENT_URL:-https://api.trimmy.com}
-      CORS_ORIGINS: ${CORS_ORIGINS:-'["https://api.trimmy.com"]'}
+      CORS_ORIGINS: ${CORS_ORIGINS}
     depends_on:
       redis:
         condition: service_healthy
@@ -53,6 +53,8 @@ services:
     networks:
       - default
       - pg-net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
 volumes:
   redis_data:
