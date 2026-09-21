@@ -5,7 +5,24 @@ on:
     branches: [sandbox]
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run tests
+        env:
+          SECRET_KEY: test-secret-key
+          DATABASE_URL: sqlite+aiosqlite:///:memory:
+          REDIS_URL: redis://localhost:6379/0
+        run: pytest -v
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
     environment: staging
     steps:
@@ -30,6 +47,9 @@ jobs:
             CLIENT_URL=${{ secrets.CLIENT_URL }}
             CORS_ORIGINS=${{ secrets.CORS_ORIGINS }}
             EOF
+
+            echo "=== Running migrations ==="
+            docker compose -f docker-compose.staging.yml run --rm app alembic upgrade head
 
             docker compose -f docker-compose.staging.yml down
             docker compose -f docker-compose.staging.yml up -d --build
