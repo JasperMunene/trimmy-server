@@ -43,3 +43,17 @@ class UserResponse(BaseModel):
 class AuthResponse(BaseModel):
     user: UserResponse
     tokens: TokenResponse
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    otp: str = Field(..., min_length=6, max_length=6)
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+
+class ResendOtpRequest(BaseModel):
+    email: EmailStr
+    purpose: str = Field(..., pattern=r"^(verification|password_reset)$")
