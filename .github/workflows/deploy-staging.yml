@@ -19,6 +19,7 @@ jobs:
           SECRET_KEY: test-secret-key
           DATABASE_URL: "sqlite+aiosqlite:///:memory:"
           REDIS_URL: redis://localhost:6379/0
+          PYTHONPATH: .
         run: pytest -v
 
   deploy:
@@ -51,6 +52,7 @@ jobs:
             echo "=== Running migrations ==="
             docker compose -f docker-compose.staging.yml run --rm app alembic upgrade head
 
+            echo "=== Building and starting containers ==="
             docker compose -f docker-compose.staging.yml down
             docker compose -f docker-compose.staging.yml up -d --build
 
