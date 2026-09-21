@@ -21,4 +21,5 @@ jobs:
           SECRET_KEY: test-secret-key
           DATABASE_URL: "sqlite+aiosqlite:///:memory:"
           REDIS_URL: redis://localhost:6379/0
+          PYTHONPATH: .
         run: pytest -v
