@@ -7,9 +7,12 @@ from app.core.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.auth.schemas import (
     AuthResponse,
+    ForgotPasswordRequest,
     LoginRequest,
     RefreshRequest,
     RegisterRequest,
+    ResendOtpRequest,
+    ResetPasswordRequest,
     TokenResponse,
     UserResponse,
 )
@@ -45,3 +48,21 @@ async def verify_email(otp: str, db: AsyncSession = Depends(get_db)):
 @router.get("/me", response_model=UserResponse)
 async def get_me(current_user: User = Depends(get_current_user)):
     return current_user
+
+
+@router.post("/forgot-password")
+async def forgot_password(data: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
+    service = AuthService(db)
+    return await service.forgot_password(data)
+
+
+@router.post("/reset-password")
+async def reset_password(data: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+    service = AuthService(db)
+    return await service.reset_password(data)
+
+
+@router.post("/resend-otp")
+async def resend_otp(data: ResendOtpRequest, db: AsyncSession = Depends(get_db)):
+    service = AuthService(db)
+    return await service.resend_otp(data)
