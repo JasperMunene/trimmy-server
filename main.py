@@ -12,6 +12,7 @@ from slowapi.util import get_remote_address
 
 from app.core.config import settings
 from app.modules.auth.router import router as auth_router
+from app.modules.business.router import router as business_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,7 +26,7 @@ limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
-    description="Trimlyy backend API",
+    description="Trimmy backend API",
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
@@ -44,6 +45,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router, prefix=settings.API_V1_STR)
+app.include_router(business_router, prefix=settings.API_V1_STR)
 
 
 @app.exception_handler(HTTPException)

@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.realpath(os.path.join(os.path.dirname(__file__), ".."
 from app.core.config import settings
 from app.core.base import Base
 import app.modules.auth.models  # noqa: F401
+import app.modules.business.models  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
