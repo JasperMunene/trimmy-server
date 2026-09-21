@@ -1,0 +1,671 @@
+import uuid
+import pytest
+from httpx import AsyncClient
+
+from app.modules.auth.models import User
+
+
+@pytest.mark.asyncio
+async def test_create_business(client: AsyncClient, auth_headers: dict):
+    resp = await client.post(
+        "/api/v1/businesses",
+        json={
+            "name": "Glow Beauty Lounge",
+            "categories": ["hair_salon", "nail_salon"],
+            "phone": "+254712345678",
+            "location": {
+                "address": "Kilimani, Nairobi",
+                "lat": -1.2921,
+                "lng": 36.7833,
+                "building": "Yaya Centre",
+                "floor": "2nd Floor",
+                "unit": "Shop 14",
+            },
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["name"] == "Glow Beauty Lounge"
+    assert data["categories"] == ["hair_salon", "nail_salon"]
+    assert data["status"] == "draft"
+    assert data["onboardingStep"] == "business_basics"
+    assert "businessId" in data
+
+
+@pytest.mark.asyncio
+async def test_create_business_duplicate_phone(client: AsyncClient, auth_headers: dict):
+    payload = {
+        "name": "Business A",
+        "categories": ["hair_salon"],
+        "phone": "+254700000001",
+        "location": {"address": "Nairobi", "lat": -1.0, "lng": 36.0},
+    }
+    resp1 = await client.post("/api/v1/businesses", json=payload, headers=auth_headers)
+    assert resp1.status_code == 201
+
+    payload["name"] = "Business B"
+    resp2 = await client.post("/api/v1/businesses", json=payload, headers=auth_headers)
+    assert resp2.status_code == 409
+    assert resp2.json()["error"] == "phone_already_registered"
+
+
+@pytest.mark.asyncio
+async def test_create_business_validation_error(client: AsyncClient, auth_headers: dict):
+    resp = await client.post(
+        "/api/v1/businesses",
+        json={"name": "", "categories": [], "phone": "+254712345678", "location": {"address": "Nairobi", "lat": 0, "lng": 0}},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_get_business(client: AsyncClient, auth_headers: dict):
+    create_resp = await client.post(
+        "/api/v1/businesses",
+        json={
+            "name": "Test Business",
+            "categories": ["spa"],
+            "phone": "+254722222222",
+            "location": {"address": "Westlands", "lat": -1.2676, "lng": 36.8025},
+        },
+        headers=auth_headers,
+    )
+    biz_id = create_resp.json()["businessId"]
+
+    resp = await client.get(f"/api/v1/businesses/{biz_id}", headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["businessId"] == biz_id
+    assert data["name"] == "Test Business"
+    assert data["status"] == "draft"
+    assert "photos" in data
+    assert "serviceCategories" in data
+
+
+@pytest.mark.asyncio
+async def test_get_business_not_found(client: AsyncClient, auth_headers: dict):
+    fake_id = str(uuid.uuid4())
+    resp = await client.get(f"/api/v1/businesses/{fake_id}", headers=auth_headers)
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_upload_photo(client: AsyncClient, auth_headers: dict):
+    create_resp = await client.post(
+        "/api/v1/businesses",
+        json={
+            "name": "Photo Test",
+            "categories": ["beauty"],
+            "phone": "+254733333333",
+            "location": {"address": "CBD", "lat": -1.2864, "lng": 36.8172},
+        },
+        headers=auth_headers,
+    )
+    biz_id = create_resp.json()["businessId"]
+
+    resp = await client.post(
+        f"/api/v1/businesses/{biz_id}/photos",
+        files={"photo": ("test.jpg", b"fake_image_data", "image/jpeg")},
+        data={"isCover": "true"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["isCover"] is True
+    assert data["businessId"] == biz_id
+    assert "photoId" in data
+
+
+@pytest.mark.asyncio
+async def test_set_working_hours(client: AsyncClient, auth_headers: dict):
+    create_resp = await client.post(
+        "/api/v1/businesses",
+        json={
+            "name": "Hours Test",
+            "categories": ["barbershop"],
+            "phone": "+254744444444",
+            "location": {"address": "Kasarani", "lat": -1.2266, "lng": 36.8874},
+        },
+        headers=auth_headers,
+    )
+    biz_id = create_resp.json()["businessId"]
+
+    resp = await client.put(
+        f"/api/v1/businesses/{biz_id}/working-hours",
+        json={
+            "weeklyHours": {
+                "monday": {"open": "09:00", "close": "19:00"},
+                "tuesday": {"open": "09:00", "close": "19:00"},
+                "wednesday": {"open": "09:00", "close": "19:00"},
+                "thursday": {"open": "09:00", "close": "19:00"},
+                "friday": {"open": "09:00", "close": "20:00"},
+                "saturday": {"open": "09:00", "close": "20:00"},
+                "sunday": None,
+            }
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["weeklyHours"]["monday"]["open"] == "09:00"
+    assert data["weeklyHours"]["sunday"] is None
+    assert data["onboardingStep"] == "working_hours"
+
+
+@pytest.mark.asyncio
+async def test_set_working_hours_invalid_time(client: AsyncClient, auth_headers: dict):
+    create_resp = await client.post(
+        "/api/v1/businesses",
+        json={
+            "name": "Bad Hours",
+            "categories": ["spa"],
+            "phone": "+254755555555",
+            "location": {"address": "Nairobi", "lat": 0, "lng": 0},
+        },
+        headers=auth_headers,
+    )
+    biz_id = create_resp.json()["businessId"]
+
+    resp = await client.put(
+        f"/api/v1/businesses/{biz_id}/working-hours",
+        json={"weeklyHours": {"monday": {"open": "19:00", "close": "09:00"}}},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "validation_error"
+
+
+@pytest.mark.asyncio
+async def test_create_service_category(client: AsyncClient, auth_headers: dict):
+    create_resp = await client.post(
+        "/api/v1/businesses",
+        json={
+            "name": "Category Test",
+            "categories": ["hair_salon"],
+            "phone": "+254766666666",
+            "location": {"address": "Nairobi", "lat": 0, "lng": 0},
+        },
+        headers=auth_headers,
+    )
+    biz_id = create_resp.json()["businessId"]
+
+    resp = await client.post(
+        f"/api/v1/businesses/{biz_id}/service-categories",
+        json={"name": "Haircuts"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["name"] == "Haircuts"
+    assert data["businessId"] == biz_id
+    assert "categoryId" in data
+
+
+@pytest.mark.asyncio
+async def test_list_service_categories(client: AsyncClient, auth_headers: dict):
+    create_resp = await client.post(
+        "/api/v1/businesses",
+        json={
+            "name": "List Cat Test",
+            "categories": ["nail_salon"],
+            "phone": "+254777777777",
+            "location": {"address": "Nairobi", "lat": 0, "lng": 0},
+        },
+        headers=auth_headers,
+    )
+    biz_id = create_resp.json()["businessId"]
+
+    await client.post(
+        f"/api/v1/businesses/{biz_id}/service-categories",
+        json={"name": "Nail Art"},
+        headers=auth_headers,
+    )
+
+    resp = await client.get(f"/api/v1/businesses/{biz_id}/service-categories", headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["categories"]) == 1
+    assert data["categories"][0]["name"] == "Nail Art"
+
+
+@pytest.mark.asyncio
+async def test_create_service(client: AsyncClient, auth_headers: dict):
+    create_resp = await client.post(
+        "/api/v1/businesses",
+        json={
+            "name": "Service Test",
+            "categories": ["hair_salon"],
+            "phone": "+254788888888",
+            "location": {"address": "Nairobi", "lat": 0, "lng": 0},
+        },
+        headers=auth_headers,
+    )
+    biz_id = create_resp.json()["businessId"]
+
+    cat_resp = await client.post(
+        f"/api/v1/businesses/{biz_id}/service-categories",
+        json={"name": "Haircuts"},
+        headers=auth_headers,
+    )
+    cat_id = cat_resp.json()["categoryId"]
+
+    resp = await client.post(
+        f"/api/v1/businesses/{biz_id}/services",
+        json={
+            "categoryId": cat_id,
+            "name": "Classic Haircut",
+            "durationMinutes": 45,
+            "price": {"amount": 800, "currency": "KES"},
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["name"] == "Classic Haircut"
+    assert data["durationMinutes"] == 45
+    assert data["price"]["amount"] == 800
+
+
+@pytest.mark.asyncio
+async def test_create_service_invalid_category(client: AsyncClient, auth_headers: dict):
+    create_resp = await client.post(
+        "/api/v1/businesses",
+        json={
+            "name": "Bad Cat",
+            "categories": ["spa"],
+            "phone": "+254799999999",
+            "location": {"address": "Nairobi", "lat": 0, "lng": 0},
+        },
+        headers=auth_headers,
+    )
+    biz_id = create_resp.json()["businessId"]
+
+    fake_cat = str(uuid.uuid4())
+    resp = await client.post(
+        f"/api/v1/businesses/{biz_id}/services",
+        json={
+            "categoryId": fake_cat,
+            "name": "Bad Service",
+            "durationMinutes": 30,
+            "price": {"amount": 500, "currency": "KES"},
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 404
+    assert resp.json()["error"] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_create_service_zero_price(client: AsyncClient, auth_headers: dict):
+    create_resp = await client.post(
+        "/api/v1/businesses",
+        json={
+            "name": "Zero Price",
+            "categories": ["beauty"],
+            "phone": "+254701111111",
+            "location": {"address": "Nairobi", "lat": 0, "lng": 0},
+        },
+        headers=auth_headers,
+    )
+    biz_id = create_resp.json()["businessId"]
+
+    cat_resp = await client.post(
+        f"/api/v1/businesses/{biz_id}/service-categories",
+        json={"name": "Facials"},
+        headers=auth_headers,
+    )
+    cat_id = cat_resp.json()["categoryId"]
+
+    resp = await client.post(
+        f"/api/v1/businesses/{biz_id}/services",
+        json={
+            "categoryId": cat_id,
+            "name": "Free Facial",
+            "durationMinutes": 30,
+            "price": {"amount": 0, "currency": "KES"},
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "validation_error"
+
+
+@pytest.mark.asyncio
+async def test_set_policies(client: AsyncClient, auth_headers: dict):
+    create_resp = await client.post(
+        "/api/v1/businesses",
+        json={
+            "name": "Policy Test",
+            "categories": ["spa"],
+            "phone": "+254702222222",
+            "location": {"address": "Nairobi", "lat": 0, "lng": 0},
+        },
+        headers=auth_headers,
+    )
+    biz_id = create_resp.json()["businessId"]
+
+    resp = await client.put(
+        f"/api/v1/businesses/{biz_id}/policies",
+        json={
+            "deposit": {
+                "required": False,
+                "type": "fixed",
+                "amount": {"amount": 0, "currency": "KES"},
+                "appliesTo": "all_services",
+            },
+            "cancellation": {"freeCancellationHours": 24, "lateFeePercent": 50},
+            "noShow": {"feePercent": 100},
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["deposit"]["required"] is False
+    assert data["cancellation"]["freeCancellationHours"] == 24
+    assert data["noShow"]["feePercent"] == 100
+    assert data["onboardingStep"] == "policies"
+
+
+@pytest.mark.asyncio
+async def test_set_payment_destination(client: AsyncClient, auth_headers: dict):
+    create_resp = await client.post(
+        "/api/v1/businesses",
+        json={
+            "name": "Payment Test",
+            "categories": ["hair_salon"],
+            "phone": "+254703333333",
+            "location": {"address": "Nairobi", "lat": 0, "lng": 0},
+        },
+        headers=auth_headers,
+    )
+    biz_id = create_resp.json()["businessId"]
+
+    resp = await client.put(
+        f"/api/v1/businesses/{biz_id}/payment-destination",
+        json={
+            "type": "bank_account",
+            "bankName": "Equity Bank Kenya",
+            "bankShortcode": "247247",
+            "bankAccountNumber": "1234567890",
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["type"] == "bank_account"
+    assert data["bankName"] == "Equity Bank Kenya"
+    assert data["verificationStatus"] == "verified"
+    assert data["onboardingStep"] == "payment_destination"
+
+
+@pytest.mark.asyncio
+async def test_set_payment_destination_missing_fields(client: AsyncClient, auth_headers: dict):
+    create_resp = await client.post(
+        "/api/v1/businesses",
+        json={
+            "name": "Missing Fields",
+            "categories": ["spa"],
+            "phone": "+254704444444",
+            "location": {"address": "Nairobi", "lat": 0, "lng": 0},
+        },
+        headers=auth_headers,
+    )
+    biz_id = create_resp.json()["businessId"]
+
+    resp = await client.put(
+        f"/api/v1/businesses/{biz_id}/payment-destination",
+        json={"type": "bank_account"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "validation_error"
+
+
+@pytest.mark.asyncio
+async def test_set_team_mode(client: AsyncClient, auth_headers: dict):
+    create_resp = await client.post(
+        "/api/v1/businesses",
+        json={
+            "name": "Team Test",
+            "categories": ["barbershop"],
+            "phone": "+254705555555",
+            "location": {"address": "Nairobi", "lat": 0, "lng": 0},
+        },
+        headers=auth_headers,
+    )
+    biz_id = create_resp.json()["businessId"]
+
+    resp = await client.patch(
+        f"/api/v1/businesses/{biz_id}/team-mode",
+        json={"teamMode": "solo"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["teamMode"] == "solo"
+    assert data["onboardingStep"] == "team_mode"
+
+
+@pytest.mark.asyncio
+async def test_set_team_mode_invalid_value(client: AsyncClient, auth_headers: dict):
+    create_resp = await client.post(
+        "/api/v1/businesses",
+        json={
+            "name": "Bad Team",
+            "categories": ["spa"],
+            "phone": "+254706666666",
+            "location": {"address": "Nairobi", "lat": 0, "lng": 0},
+        },
+        headers=auth_headers,
+    )
+    biz_id = create_resp.json()["businessId"]
+
+    resp = await client.patch(
+        f"/api/v1/businesses/{biz_id}/team-mode",
+        json={"teamMode": "invalid"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_invite_team_member(client: AsyncClient, auth_headers: dict):
+    create_resp = await client.post(
+        "/api/v1/businesses",
+        json={
+            "name": "Invite Test",
+            "categories": ["hair_salon"],
+            "phone": "+254707777777",
+            "location": {"address": "Nairobi", "lat": 0, "lng": 0},
+        },
+        headers=auth_headers,
+    )
+    biz_id = create_resp.json()["businessId"]
+
+    resp = await client.post(
+        f"/api/v1/businesses/{biz_id}/team/invitations",
+        json={"email": "jane@example.com", "role": "front_desk"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["email"] == "jane@example.com"
+    assert data["role"] == "front_desk"
+    assert data["status"] == "pending"
+    assert "invitationId" in data
+
+
+@pytest.mark.asyncio
+async def test_invite_team_member_no_contact(client: AsyncClient, auth_headers: dict):
+    create_resp = await client.post(
+        "/api/v1/businesses",
+        json={
+            "name": "No Contact",
+            "categories": ["spa"],
+            "phone": "+254708888888",
+            "location": {"address": "Nairobi", "lat": 0, "lng": 0},
+        },
+        headers=auth_headers,
+    )
+    biz_id = create_resp.json()["businessId"]
+
+    resp = await client.post(
+        f"/api/v1/businesses/{biz_id}/team/invitations",
+        json={"role": "staff"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "validation_error"
+
+
+@pytest.mark.asyncio
+async def test_invite_team_member_duplicate(client: AsyncClient, auth_headers: dict):
+    create_resp = await client.post(
+        "/api/v1/businesses",
+        json={
+            "name": "Dup Invite",
+            "categories": ["nail_salon"],
+            "phone": "+254709999999",
+            "location": {"address": "Nairobi", "lat": 0, "lng": 0},
+        },
+        headers=auth_headers,
+    )
+    biz_id = create_resp.json()["businessId"]
+
+    await client.post(
+        f"/api/v1/businesses/{biz_id}/team/invitations",
+        json={"email": "dup@example.com", "role": "staff"},
+        headers=auth_headers,
+    )
+
+    resp = await client.post(
+        f"/api/v1/businesses/{biz_id}/team/invitations",
+        json={"email": "dup@example.com", "role": "staff"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 409
+    assert resp.json()["error"] == "already_invited"
+
+
+@pytest.mark.asyncio
+async def test_publish_business(client: AsyncClient, auth_headers: dict):
+    create_resp = await client.post(
+        "/api/v1/businesses",
+        json={
+            "name": "Publish Test",
+            "categories": ["hair_salon"],
+            "phone": "+254710101010",
+            "location": {"address": "Nairobi", "lat": 0, "lng": 0},
+        },
+        headers=auth_headers,
+    )
+    biz_id = create_resp.json()["businessId"]
+
+    await client.put(
+        f"/api/v1/businesses/{biz_id}/working-hours",
+        json={"weeklyHours": {"monday": {"open": "09:00", "close": "18:00"}}},
+        headers=auth_headers,
+    )
+
+    cat_resp = await client.post(
+        f"/api/v1/businesses/{biz_id}/service-categories",
+        json={"name": "Hair"},
+        headers=auth_headers,
+    )
+    cat_id = cat_resp.json()["categoryId"]
+
+    await client.post(
+        f"/api/v1/businesses/{biz_id}/services",
+        json={"categoryId": cat_id, "name": "Cut", "durationMinutes": 30, "price": {"amount": 500, "currency": "KES"}},
+        headers=auth_headers,
+    )
+
+    await client.put(
+        f"/api/v1/businesses/{biz_id}/policies",
+        json={
+            "deposit": {"required": False, "type": "fixed", "amount": {"amount": 0, "currency": "KES"}, "appliesTo": "all_services"},
+            "cancellation": {"freeCancellationHours": 24, "lateFeePercent": 50},
+            "noShow": {"feePercent": 100},
+        },
+        headers=auth_headers,
+    )
+
+    await client.put(
+        f"/api/v1/businesses/{biz_id}/payment-destination",
+        json={"type": "mpesa_till", "tillNumber": "123456"},
+        headers=auth_headers,
+    )
+
+    resp = await client.patch(
+        f"/api/v1/businesses/{biz_id}/publish",
+        json={"visible": True},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "published"
+    assert data["visible"] is True
+    assert data["publishedAt"] is not None
+
+
+@pytest.mark.asyncio
+async def test_publish_business_incomplete(client: AsyncClient, auth_headers: dict):
+    create_resp = await client.post(
+        "/api/v1/businesses",
+        json={
+            "name": "Incomplete",
+            "categories": ["spa"],
+            "phone": "+254711111111",
+            "location": {"address": "Nairobi", "lat": 0, "lng": 0},
+        },
+        headers=auth_headers,
+    )
+    biz_id = create_resp.json()["businessId"]
+
+    resp = await client.patch(
+        f"/api/v1/businesses/{biz_id}/publish",
+        json={"visible": True},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422
+    assert resp.json()["error"] == "incomplete_setup"
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_access(client: AsyncClient):
+    resp = await client.get("/api/v1/businesses/some-id")
+    assert resp.status_code == 403 or resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_business_access_other_users_business(client: AsyncClient, auth_headers: dict, test_user, db_session):
+    from app.modules.business.models import Business, BusinessStatus
+    from app.modules.auth.models import AuthType
+
+    other_user = User(
+        id=uuid.uuid4(),
+        email="other@example.com",
+        first_name="Other",
+        last_name="User",
+        auth_type=AuthType.EMAIL,
+        verified=True,
+    )
+    db_session.add(other_user)
+    await db_session.commit()
+
+    biz = Business(
+        owner_id=other_user.id,
+        name="Other Business",
+        phone="+254799999999",
+        categories=["spa"],
+        location={"address": "Nairobi", "lat": 0, "lng": 0},
+        status=BusinessStatus.DRAFT,
+    )
+    db_session.add(biz)
+    await db_session.commit()
+    await db_session.refresh(biz)
+
+    resp = await client.get(f"/api/v1/businesses/{biz.id}", headers=auth_headers)
+    assert resp.status_code == 404

@@ -1,0 +1,270 @@
+from pydantic import BaseModel, Field
+from typing import Optional, List
+from datetime import datetime
+import uuid as uuid_pkg
+
+
+# ─── Location ────────────────────────────────────────────────
+
+class LocationRequest(BaseModel):
+    address: str
+    lat: float
+    lng: float
+    building: Optional[str] = None
+    floor: Optional[str] = None
+    unit: Optional[str] = None
+
+
+class LocationResponse(BaseModel):
+    address: str
+    lat: float
+    lng: float
+    building: Optional[str] = None
+    floor: Optional[str] = None
+    unit: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+# ─── Money ───────────────────────────────────────────────────
+
+class MoneyResponse(BaseModel):
+    amount: int
+    currency: str = "KES"
+
+
+# ─── Create Business ────────────────────────────────────────
+
+class CreateBusinessRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    categories: List[str] = Field(..., min_length=1)
+    phone: str = Field(..., min_length=1)
+    location: LocationRequest
+
+
+class CreateBusinessResponse(BaseModel):
+    business_id: uuid_pkg.UUID = Field(alias="businessId")
+    name: str
+    categories: List[str]
+    phone: str
+    location: LocationResponse
+    status: str
+    onboarding_step: Optional[str] = Field(None, alias="onboardingStep")
+    created_at: datetime = Field(alias="createdAt")
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+# ─── Get Business Draft ─────────────────────────────────────
+
+class GetBusinessResponse(BaseModel):
+    business_id: uuid_pkg.UUID = Field(alias="businessId")
+    name: str
+    categories: Optional[List[str]] = None
+    phone: str
+    location: Optional[LocationResponse] = None
+    photos: Optional[List["PhotoResponse"]] = []
+    working_hours: Optional["WorkingHoursResponse"] = Field(None, alias="workingHours")
+    service_categories: Optional[List["ServiceCategoryResponse"]] = Field([], alias="serviceCategories")
+    policies: Optional["PoliciesResponse"] = None
+    payment_destination: Optional["PaymentDestinationResponse"] = Field(None, alias="paymentDestination")
+    team_mode: Optional[str] = Field(None, alias="teamMode")
+    status: str
+    onboarding_step: Optional[str] = Field(None, alias="onboardingStep")
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+# ─── Photo ───────────────────────────────────────────────────
+
+class PhotoResponse(BaseModel):
+    photo_id: uuid_pkg.UUID = Field(alias="photoId")
+    business_id: uuid_pkg.UUID = Field(alias="businessId")
+    url: str
+    is_cover: bool = Field(alias="isCover")
+    created_at: datetime = Field(alias="createdAt")
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+# ─── Working Hours ───────────────────────────────────────────
+
+class DayHoursResponse(BaseModel):
+    open: str
+    close: str
+
+
+class WorkingHoursRequest(BaseModel):
+    weekly_hours: dict = Field(alias="weeklyHours")
+
+    model_config = {"populate_by_name": True}
+
+
+class WorkingHoursResponse(BaseModel):
+    business_id: uuid_pkg.UUID = Field(alias="businessId")
+    weekly_hours: dict = Field(alias="weeklyHours")
+    onboarding_step: Optional[str] = Field(None, alias="onboardingStep")
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+# ─── Service Category ────────────────────────────────────────
+
+class CreateServiceCategoryRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+
+
+class ServiceCategoryResponse(BaseModel):
+    category_id: uuid_pkg.UUID = Field(alias="categoryId")
+    business_id: uuid_pkg.UUID = Field(alias="businessId")
+    name: str
+    created_at: Optional[datetime] = Field(None, alias="createdAt")
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+# ─── Service ─────────────────────────────────────────────────
+
+class CreateServiceRequest(BaseModel):
+    category_id: uuid_pkg.UUID = Field(alias="categoryId")
+    name: str = Field(..., min_length=1, max_length=100)
+    duration_minutes: int = Field(alias="durationMinutes", gt=0)
+    price: MoneyResponse
+
+
+class ServiceResponse(BaseModel):
+    service_id: uuid_pkg.UUID = Field(alias="serviceId")
+    business_id: uuid_pkg.UUID = Field(alias="businessId")
+    category_id: uuid_pkg.UUID = Field(alias="categoryId")
+    name: str
+    duration_minutes: int = Field(alias="durationMinutes")
+    price: MoneyResponse
+    created_at: Optional[datetime] = Field(None, alias="createdAt")
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+class ListServiceCategoriesResponse(BaseModel):
+    categories: List[dict]
+
+
+# ─── Policies ────────────────────────────────────────────────
+
+class DepositRuleRequest(BaseModel):
+    required: bool
+    type: str = Field(..., pattern=r"^(fixed|percent)$")
+    amount: MoneyResponse
+    applies_to: str = Field(alias="appliesTo", pattern=r"^(all_services|selected_services)$")
+
+    model_config = {"populate_by_name": True}
+
+
+class CancellationPolicyRequest(BaseModel):
+    free_cancellation_hours: int = Field(alias="freeCancellationHours", ge=0)
+    late_fee_percent: int = Field(alias="lateFeePercent", ge=0, le=100)
+
+    model_config = {"populate_by_name": True}
+
+
+class NoShowPolicyRequest(BaseModel):
+    fee_percent: int = Field(alias="feePercent", ge=0, le=100)
+
+    model_config = {"populate_by_name": True}
+
+
+class SetPoliciesRequest(BaseModel):
+    deposit: DepositRuleRequest
+    cancellation: CancellationPolicyRequest
+    no_show: NoShowPolicyRequest = Field(alias="noShow")
+
+    model_config = {"populate_by_name": True}
+
+
+class PoliciesResponse(BaseModel):
+    business_id: uuid_pkg.UUID = Field(alias="businessId")
+    deposit: dict
+    cancellation: dict
+    no_show: dict = Field(alias="noShow")
+    onboarding_step: Optional[str] = Field(None, alias="onboardingStep")
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+# ─── Payment Destination ─────────────────────────────────────
+
+class SetPaymentDestinationRequest(BaseModel):
+    type: str = Field(..., pattern=r"^(mpesa_till|mpesa_paybill|bank_account)$")
+    till_number: Optional[str] = Field(None, alias="tillNumber")
+    paybill_number: Optional[str] = Field(None, alias="paybillNumber")
+    paybill_account_number: Optional[str] = Field(None, alias="paybillAccountNumber")
+    bank_name: Optional[str] = Field(None, alias="bankName")
+    bank_shortcode: Optional[str] = Field(None, alias="bankShortcode")
+    bank_account_number: Optional[str] = Field(None, alias="bankAccountNumber")
+
+    model_config = {"populate_by_name": True}
+
+
+class PaymentDestinationResponse(BaseModel):
+    business_id: uuid_pkg.UUID = Field(alias="businessId")
+    type: str
+    till_number: Optional[str] = Field(None, alias="tillNumber")
+    paybill_number: Optional[str] = Field(None, alias="paybillNumber")
+    paybill_account_number: Optional[str] = Field(None, alias="paybillAccountNumber")
+    bank_name: Optional[str] = Field(None, alias="bankName")
+    bank_shortcode: Optional[str] = Field(None, alias="bankShortcode")
+    bank_account_number: Optional[str] = Field(None, alias="bankAccountNumber")
+    verification_status: str = Field(alias="verificationStatus")
+    onboarding_step: Optional[str] = Field(None, alias="onboardingStep")
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+# ─── Team Mode ───────────────────────────────────────────────
+
+class SetTeamModeRequest(BaseModel):
+    team_mode: str = Field(alias="teamMode", pattern=r"^(solo|team)$")
+
+    model_config = {"populate_by_name": True}
+
+
+class TeamModeResponse(BaseModel):
+    business_id: uuid_pkg.UUID = Field(alias="businessId")
+    team_mode: str = Field(alias="teamMode")
+    onboarding_step: Optional[str] = Field(None, alias="onboardingStep")
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+# ─── Team Invitation ─────────────────────────────────────────
+
+class InviteTeamMemberRequest(BaseModel):
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    role: str = Field(..., pattern=r"^(front_desk|staff)$")
+
+
+class TeamInvitationResponse(BaseModel):
+    invitation_id: uuid_pkg.UUID = Field(alias="invitationId")
+    business_id: uuid_pkg.UUID = Field(alias="businessId")
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    role: str
+    status: str
+    sent_at: datetime = Field(alias="sentAt")
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+# ─── Publish Business ────────────────────────────────────────
+
+class PublishBusinessRequest(BaseModel):
+    visible: bool
+
+
+class PublishBusinessResponse(BaseModel):
+    business_id: uuid_pkg.UUID = Field(alias="businessId")
+    status: str
+    visible: bool
+    published_at: Optional[datetime] = Field(None, alias="publishedAt")
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
