@@ -2,11 +2,15 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, Asyn
 from typing import AsyncGenerator
 from app.core.config import settings
 
+_is_sqlite = settings.DATABASE_URL.startswith("sqlite")
+
 engine = create_async_engine(
     settings.DATABASE_URL,
-    pool_size=20,
-    pool_recycle=3600,
-    pool_pre_ping=True,
+    **({} if _is_sqlite else {
+        "pool_size": 20,
+        "pool_recycle": 3600,
+        "pool_pre_ping": True,
+    }),
 )
 
 AsyncSessionLocal = async_sessionmaker(

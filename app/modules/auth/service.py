@@ -170,7 +170,11 @@ class AuthService:
                 },
             )
 
-        if db_token.expires_at < datetime.now(timezone.utc):
+        now_utc = datetime.now(timezone.utc)
+        expires_at = db_token.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at < now_utc:
             raise HTTPException(
                 status_code=401,
                 detail={"error": "refresh_token_expired", "message": "Refresh token expired"},
