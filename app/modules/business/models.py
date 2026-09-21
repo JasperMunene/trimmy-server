@@ -215,6 +215,8 @@ class TeamInvitation(Base):
     phone: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     role: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(20), default=InvitationStatus.PENDING)
+    invited_by: Mapped[uuid_pkg.UUID] = mapped_column(UUID, nullable=False)
+    user_id: Mapped[Optional[uuid_pkg.UUID]] = mapped_column(UUID, nullable=True)
     sent_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

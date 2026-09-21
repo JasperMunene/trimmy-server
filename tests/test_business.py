@@ -669,3 +669,164 @@ async def test_business_access_other_users_business(client: AsyncClient, auth_he
 
     resp = await client.get(f"/api/v1/businesses/{biz.id}", headers=auth_headers)
     assert resp.status_code == 404
+
+
+# ─── Team Invitation Endpoints ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_list_my_invitations_empty(client: AsyncClient, auth_headers: dict):
+    resp = await client.get("/api/v1/me/invitations", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["invitations"] == []
+
+
+@pytest.mark.asyncio
+async def test_list_my_invitations(client: AsyncClient, auth_headers: dict, db_session):
+    from datetime import datetime, timezone
+    from app.modules.business.models import Business, TeamInvitation, InvitationStatus, BusinessStatus
+    user = (await db_session.execute(
+        __import__('sqlalchemy').select(User).where(User.email == "test@example.com")
+    )).scalar_one()
+    biz = Business(
+        owner_id=user.id,
+        name="Test Salon",
+        phone="+254712345678",
+        categories=["hair_salon"],
+        location={"address": "Nairobi", "lat": 0, "lng": 0},
+        status=BusinessStatus.DRAFT,
+    )
+    db_session.add(biz)
+    await db_session.flush()
+    inv = TeamInvitation(
+        business_id=biz.id,
+        phone="+1234567890",
+        role="front_desk",
+        status=InvitationStatus.PENDING,
+        invited_by=user.id,
+    )
+    db_session.add(inv)
+    await db_session.commit()
+    await db_session.refresh(inv)
+    resp = await client.get("/api/v1/me/invitations", headers=auth_headers)
+    assert resp.status_code == 200
+    invitations = resp.json()["invitations"]
+    assert len(invitations) == 1
+    assert invitations[0]["businessName"] == "Test Salon"
+    assert invitations[0]["role"] == "front_desk"
+    assert invitations[0]["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_respond_to_invitation_accept(client: AsyncClient, auth_headers: dict, db_session):
+    from app.modules.business.models import Business, TeamInvitation, InvitationStatus, BusinessStatus
+    user = (await db_session.execute(
+        __import__('sqlalchemy').select(User).where(User.email == "test@example.com")
+    )).scalar_one()
+    biz = Business(
+        owner_id=user.id,
+        name="Test Salon",
+        phone="+254712345678",
+        categories=["hair_salon"],
+        location={"address": "Nairobi", "lat": 0, "lng": 0},
+        status=BusinessStatus.DRAFT,
+    )
+    db_session.add(biz)
+    await db_session.flush()
+    inv = TeamInvitation(
+        business_id=biz.id,
+        phone="+1234567890",
+        role="staff",
+        status=InvitationStatus.PENDING,
+        invited_by=user.id,
+    )
+    db_session.add(inv)
+    await db_session.commit()
+    await db_session.refresh(inv)
+    resp = await client.post(
+        f"/api/v1/invitations/{inv.id}/respond",
+        json={"action": "accept"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "accepted"
+
+
+@pytest.mark.asyncio
+async def test_respond_to_invitation_decline(client: AsyncClient, auth_headers: dict, db_session):
+    from app.modules.business.models import Business, TeamInvitation, InvitationStatus, BusinessStatus
+    user = (await db_session.execute(
+        __import__('sqlalchemy').select(User).where(User.email == "test@example.com")
+    )).scalar_one()
+    biz = Business(
+        owner_id=user.id,
+        name="Test Salon",
+        phone="+254712345678",
+        categories=["hair_salon"],
+        location={"address": "Nairobi", "lat": 0, "lng": 0},
+        status=BusinessStatus.DRAFT,
+    )
+    db_session.add(biz)
+    await db_session.flush()
+    inv = TeamInvitation(
+        business_id=biz.id,
+        phone="+1234567890",
+        role="staff",
+        status=InvitationStatus.PENDING,
+        invited_by=user.id,
+    )
+    db_session.add(inv)
+    await db_session.commit()
+    await db_session.refresh(inv)
+    resp = await client.post(
+        f"/api/v1/invitations/{inv.id}/respond",
+        json={"action": "decline"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "declined"
+
+
+@pytest.mark.asyncio
+async def test_respond_to_invitation_not_found(client: AsyncClient, auth_headers: dict):
+    resp = await client.post(
+        "/api/v1/invitations/00000000-0000-0000-0000-000000000000/respond",
+        json={"action": "accept"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_respond_to_invitation_already_responded(client: AsyncClient, auth_headers: dict, db_session):
+    from app.modules.business.models import Business, TeamInvitation, InvitationStatus, BusinessStatus
+    user = (await db_session.execute(
+        __import__('sqlalchemy').select(User).where(User.email == "test@example.com")
+    )).scalar_one()
+    biz = Business(
+        owner_id=user.id,
+        name="Test Salon",
+        phone="+254712345678",
+        categories=["hair_salon"],
+        location={"address": "Nairobi", "lat": 0, "lng": 0},
+        status=BusinessStatus.DRAFT,
+    )
+    db_session.add(biz)
+    await db_session.flush()
+    inv = TeamInvitation(
+        business_id=biz.id,
+        phone="+1234567890",
+        role="staff",
+        status=InvitationStatus.ACCEPTED,
+        invited_by=user.id,
+    )
+    db_session.add(inv)
+    await db_session.commit()
+    await db_session.refresh(inv)
+    resp = await client.post(
+        f"/api/v1/invitations/{inv.id}/respond",
+        json={"action": "accept"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 409
+    assert resp.json()["error"] == "already_responded"

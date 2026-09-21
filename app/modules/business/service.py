@@ -549,6 +549,7 @@ class BusinessService:
             phone=data.phone,
             role=data.role,
             status=InvitationStatus.PENDING,
+            invited_by=user_id,
         )
         self.db.add(invitation)
         await self.db.commit()
@@ -607,4 +608,54 @@ class BusinessService:
             status=business.status,
             visible=data.visible,
             publishedAt=business.published_at,
+        )
+
+    # ─── Team Invitations (received) ──────────────────────────
+
+    async def list_my_invitations(self, user_id: str):
+        from app.modules.business.schemas import ListMyInvitationsResponse, MyInvitationResponse
+        user = await self.db.get(User, user_id)
+        if not user or not user.phone:
+            return ListMyInvitationsResponse(invitations=[])
+        result = await self.db.execute(
+            select(TeamInvitation)
+            .where(
+                TeamInvitation.status == InvitationStatus.PENDING,
+                TeamInvitation.phone == user.phone,
+            )
+            .order_by(TeamInvitation.sent_at.desc())
+        )
+        invitations = result.scalars().all()
+        items = []
+        for inv in invitations:
+            biz = await self.db.get(Business, inv.business_id)
+            items.append(MyInvitationResponse(
+                invitationId=inv.id,
+                businessId=inv.business_id,
+                businessName=biz.name if biz else "",
+                role=inv.role,
+                status=inv.status,
+                sentAt=inv.sent_at,
+            ))
+        return ListMyInvitationsResponse(invitations=items)
+
+    async def respond_to_invitation(self, invitation_id: str, user_id: str, data):
+        from app.modules.business.schemas import RespondToInvitationResponse
+        invitation = await self.db.get(TeamInvitation, invitation_id)
+        if not invitation:
+            raise HTTPException(status_code=404, detail={"error": "not_found", "message": "No pending invitation found for this id"})
+        if invitation.status != InvitationStatus.PENDING:
+            raise HTTPException(status_code=409, detail={"error": "already_responded", "message": "This invitation has already been accepted or declined"})
+        user = await self.db.get(User, user_id)
+        if not user or not user.phone or user.phone != invitation.phone:
+            raise HTTPException(status_code=404, detail={"error": "not_found", "message": "No pending invitation found for this id"})
+        if data.action == "accept":
+            invitation.status = InvitationStatus.ACCEPTED
+            invitation.user_id = user_id
+        else:
+            invitation.status = InvitationStatus.DECLINED
+        await self.db.commit()
+        return RespondToInvitationResponse(
+            invitationId=invitation.id,
+            status=invitation.status,
         )

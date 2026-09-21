@@ -255,6 +255,36 @@ class TeamInvitationResponse(BaseModel):
     model_config = {"from_attributes": True, "populate_by_name": True}
 
 
+# ─── My Invitations (received) ───────────────────────────────
+
+class MyInvitationResponse(BaseModel):
+    invitation_id: uuid_pkg.UUID = Field(alias="invitationId")
+    business_id: uuid_pkg.UUID = Field(alias="businessId")
+    business_name: str = Field(alias="businessName")
+    role: str
+    status: str
+    sent_at: datetime = Field(alias="sentAt")
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+class ListMyInvitationsResponse(BaseModel):
+    invitations: List[MyInvitationResponse]
+
+
+# ─── Respond to Invitation ───────────────────────────────────
+
+class RespondToInvitationRequest(BaseModel):
+    action: str = Field(..., pattern=r"^(accept|decline)$")
+
+
+class RespondToInvitationResponse(BaseModel):
+    invitation_id: uuid_pkg.UUID = Field(alias="invitationId")
+    status: str
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+
 # ─── Publish Business ────────────────────────────────────────
 
 class PublishBusinessRequest(BaseModel):

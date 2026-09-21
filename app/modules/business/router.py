@@ -9,7 +9,10 @@ from app.modules.business.schemas import (
     CreateServiceCategoryRequest,
     CreateServiceRequest,
     InviteTeamMemberRequest,
+    ListMyInvitationsResponse,
     PublishBusinessRequest,
+    RespondToInvitationRequest,
+    RespondToInvitationResponse,
     SetPaymentDestinationRequest,
     SetPoliciesRequest,
     SetTeamModeRequest,
@@ -18,6 +21,7 @@ from app.modules.business.schemas import (
 from app.modules.business.service import BusinessService
 
 router = APIRouter(prefix="/businesses", tags=["Business Setup"])
+team_router = APIRouter(tags=["Team"])
 
 
 @router.post("", status_code=201)
@@ -150,3 +154,26 @@ async def publish_business(
 ):
     service = BusinessService(db)
     return await service.publish_business(business_id, str(current_user.id), data)
+
+
+# ─── Team Invitations (received) ──────────────────────────────
+
+
+@team_router.get("/me/invitations", response_model=ListMyInvitationsResponse)
+async def list_my_invitations(
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = BusinessService(db)
+    return await service.list_my_invitations(str(current_user.id))
+
+
+@team_router.post("/invitations/{invitation_id}/respond", response_model=RespondToInvitationResponse)
+async def respond_to_invitation(
+    invitation_id: str,
+    data: RespondToInvitationRequest,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = BusinessService(db)
+    return await service.respond_to_invitation(invitation_id, str(current_user.id), data)
