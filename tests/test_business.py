@@ -1130,3 +1130,41 @@ async def test_delete_service_category_not_found(client: AsyncClient, auth_heade
     )
     assert resp.status_code == 404
     assert resp.json()["error"] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_invalid_path_uuids_return_404(client: AsyncClient, auth_headers: dict):
+    biz_id = await _create_business(client, auth_headers, name="Bad Path Ids", phone="+254730000014")
+
+    bad = "not-a-uuid"
+    body = {"name": "x", "durationMinutes": 30, "price": {"amount": 100, "currency": "KES"}}
+
+    resp = await client.patch(
+        f"/api/v1/businesses/{bad}", json={**body, "categories": ["hair_salon"], "phone": "+254730000014",
+        "location": {"address": "Nairobi", "lat": 0, "lng": 0}},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 404
+
+    resp = await client.delete(f"/api/v1/businesses/{bad}/photos/{uuid.uuid4()}", headers=auth_headers)
+    assert resp.status_code == 404
+
+    resp = await client.delete(f"/api/v1/businesses/{biz_id}/photos/not-a-uuid", headers=auth_headers)
+    assert resp.status_code == 404
+    assert resp.json()["error"] == "not_found"
+
+    resp = await client.patch(
+        f"/api/v1/businesses/{biz_id}/services/not-a-uuid", json=body, headers=auth_headers
+    )
+    assert resp.status_code == 404
+    assert resp.json()["error"] == "not_found"
+
+    resp = await client.delete(
+        f"/api/v1/businesses/{biz_id}/services/not-a-uuid", headers=auth_headers
+    )
+    assert resp.status_code == 404
+
+    resp = await client.delete(
+        f"/api/v1/businesses/{biz_id}/service-categories/not-a-uuid", headers=auth_headers
+    )
+    assert resp.status_code == 404
