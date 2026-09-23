@@ -19,6 +19,7 @@ from app.modules.business.schemas import (
     SetPaymentDestinationRequest,
     SetPoliciesRequest,
     SetTeamModeRequest,
+    UpdateServiceRequest,
     WorkingHoursRequest,
 )
 from app.modules.business.service import BusinessService
@@ -85,6 +86,17 @@ async def get_business(
     return await service.get_business(business_id, str(current_user.id))
 
 
+@router.patch("/{business_id}")
+async def update_business(
+    business_id: str,
+    data: CreateBusinessRequest,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = BusinessService(db)
+    return await service.update_business(business_id, str(current_user.id), data)
+
+
 @router.post("/{business_id}/photos", status_code=201)
 async def upload_photo(
     business_id: str,
@@ -97,6 +109,17 @@ async def upload_photo(
     url = f"data:{photo.content_type};base64,{len(contents)}_placeholder"
     service = BusinessService(db)
     return await service.upload_photo(business_id, str(current_user.id), url, isCover.lower() == "true")
+
+
+@router.delete("/{business_id}/photos/{photo_id}", status_code=204)
+async def delete_photo(
+    business_id: str,
+    photo_id: str,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = BusinessService(db)
+    await service.delete_photo(business_id, str(current_user.id), photo_id)
 
 
 @router.put("/{business_id}/working-hours")
@@ -140,6 +163,40 @@ async def create_service(
 ):
     service = BusinessService(db)
     return await service.create_service(business_id, str(current_user.id), data)
+
+
+@router.patch("/{business_id}/services/{service_id}")
+async def update_service(
+    business_id: str,
+    service_id: str,
+    data: UpdateServiceRequest,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = BusinessService(db)
+    return await service.update_service(business_id, str(current_user.id), service_id, data)
+
+
+@router.delete("/{business_id}/services/{service_id}", status_code=204)
+async def delete_service(
+    business_id: str,
+    service_id: str,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = BusinessService(db)
+    await service.delete_service(business_id, str(current_user.id), service_id)
+
+
+@router.delete("/{business_id}/service-categories/{category_id}", status_code=204)
+async def delete_service_category(
+    business_id: str,
+    category_id: str,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = BusinessService(db)
+    await service.delete_service_category(business_id, str(current_user.id), category_id)
 
 
 @router.put("/{business_id}/policies")
