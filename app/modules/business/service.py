@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
+from math import asin, cos, radians, sin, sqrt
 from typing import Optional
+import uuid as uuid_pkg
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,37 +17,79 @@ from app.modules.business.models import (
     OnboardingStep,
     PaymentDestination,
     PaymentDestinationType,
+    Review,
     Service,
     ServiceCategory,
+    Staff,
     TeamInvitation,
     TeamMode,
     VerificationStatus,
     WorkingHours,
 )
 from app.modules.business.schemas import (
+    BusinessProfileResponse,
+    BusinessSummaryResponse,
+    CancellationPolicyResponse,
     CreateBusinessRequest,
     CreateBusinessResponse,
     CreateServiceCategoryRequest,
     CreateServiceRequest,
+    DepositRuleResponse,
     GetBusinessResponse,
     InviteTeamMemberRequest,
     ListServiceCategoriesResponse,
     LocationResponse,
     MoneyResponse,
+    NoShowPolicyResponse,
     PaymentDestinationResponse,
     PhotoResponse,
     PoliciesResponse,
+    ProfilePoliciesResponse,
+    ProfileServiceResponse,
     PublishBusinessRequest,
     PublishBusinessResponse,
+    ReviewResponse,
+    SearchResponse,
     ServiceCategoryResponse,
     ServiceResponse,
     SetPaymentDestinationRequest,
     SetPoliciesRequest,
     SetTeamModeRequest,
+    StaffMemberResponse,
     TeamInvitationResponse,
     TeamModeResponse,
     WorkingHoursResponse,
 )
+
+
+_WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+
+
+def haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Great-circle distance between two WGS84 points, in kilometres."""
+    dlat = radians(lat2 - lat1)
+    dlng = radians(lng2 - lng1)
+    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlng / 2) ** 2
+    return 6371.0 * 2 * asin(sqrt(a))
+
+
+def derive_deposit_summary(policies: Optional[BusinessPolicies]) -> str:
+    if not policies or not policies.deposit_required:
+        return "No deposit required"
+    amount = policies.deposit_amount or 0
+    if policies.deposit_type == "percent":
+        return f"{amount}% deposit required"
+    currency = policies.deposit_currency or "KES"
+    return f"{currency} {amount} deposit required"
+
+
+def derive_cancellation_summary(policies: Optional[BusinessPolicies]) -> str:
+    if not policies:
+        return "Free cancellation up to 24h before, 50% fee after"
+    return (
+        f"Free cancellation up to {policies.cancellation_free_hours}h before, "
+        f"{policies.cancellation_late_fee_percent}% fee after"
+    )
 
 
 class BusinessService:
@@ -108,6 +152,8 @@ class BusinessService:
             phone=data.phone,
             categories=data.categories,
             location=data.location.model_dump(),
+            description=data.description,
+            amenities=data.amenities,
             status=BusinessStatus.DRAFT,
             onboarding_step=OnboardingStep.BUSINESS_BASICS,
         )
@@ -214,6 +260,8 @@ class BusinessService:
             name=business.name,
             categories=business.categories,
             phone=business.phone,
+            description=business.description,
+            amenities=business.amenities,
             location=LocationResponse(**business.location) if business.location else None,
             photos=photos,
             workingHours=working_hours,
@@ -598,6 +646,31 @@ class BusinessService:
                     detail={"error": "incomplete_setup", "message": "paymentDestination must be verified before publishing"},
                 )
 
+            if business.team_mode != TeamMode.TEAM:
+                existing_staff = await self.db.execute(
+                    select(Staff).where(
+                        Staff.business_id == business.id,
+                        Staff.user_id == business.owner_id,
+                    )
+                )
+                if not existing_staff.scalar_one_or_none():
+                    owner = await self.db.get(User, business.owner_id)
+                    owner_name = ""
+                    if owner:
+                        owner_name = " ".join(
+                            p for p in (owner.first_name, owner.last_name) if p
+                        ) or owner.email or "Owner"
+                    self.db.add(
+                        Staff(
+                            business_id=business.id,
+                            user_id=business.owner_id,
+                            name=owner_name or "Owner",
+                            role="owner",
+                            specialties=[],
+                            portfolio=[],
+                        )
+                    )
+
         business.status = BusinessStatus.PUBLISHED if data.visible else BusinessStatus.DRAFT
         business.published_at = datetime.now(timezone.utc) if data.visible else None
         business.onboarding_step = OnboardingStep.REVIEW_PUBLISH
@@ -652,10 +725,245 @@ class BusinessService:
         if data.action == "accept":
             invitation.status = InvitationStatus.ACCEPTED
             invitation.user_id = user_id
+
+            existing_staff = await self.db.execute(
+                select(Staff).where(
+                    Staff.business_id == invitation.business_id,
+                    Staff.user_id == uuid_pkg.UUID(str(user_id)),
+                )
+            )
+            if not existing_staff.scalar_one_or_none():
+                member_name = (
+                    " ".join(p for p in (user.first_name, user.last_name) if p)
+                    or user.email
+                    or "Team member"
+                )
+                self.db.add(
+                    Staff(
+                        business_id=invitation.business_id,
+                        user_id=uuid_pkg.UUID(str(user_id)),
+                        name=member_name,
+                        role=invitation.role,
+                        specialties=[],
+                        portfolio=[],
+                    )
+                )
         else:
             invitation.status = InvitationStatus.DECLINED
         await self.db.commit()
         return RespondToInvitationResponse(
             invitationId=invitation.id,
             status=invitation.status,
+        )
+
+    # ─── Discovery: search ─────────────────────────────────────
+
+    async def search_businesses(
+        self,
+        lat: Optional[float] = None,
+        lng: Optional[float] = None,
+        query: Optional[str] = None,
+        category: Optional[str] = None,
+        price_max: Optional[int] = None,
+        rating_min: Optional[float] = None,
+        radius_km: Optional[float] = None,
+    ) -> SearchResponse:
+        result = await self.db.execute(
+            select(Business)
+            .where(Business.status == BusinessStatus.PUBLISHED)
+            .options(
+                selectinload(Business.photos),
+                selectinload(Business.service_categories).selectinload(ServiceCategory.services),
+                selectinload(Business.reviews),
+            )
+        )
+        businesses = result.scalars().all()
+
+        has_coords = lat is not None and lng is not None
+        q = query.strip().lower() if query else ""
+
+        rows = []
+        for biz in businesses:
+            if category and category not in (biz.categories or []):
+                continue
+
+            services = [s for cat in (biz.service_categories or []) for s in (cat.services or [])]
+
+            if q:
+                haystack = " ".join([biz.name, *[s.name for s in services]]).lower()
+                if q not in haystack:
+                    continue
+
+            if price_max is not None and not any(s.price_amount <= price_max for s in services):
+                continue
+
+            reviews = list(biz.reviews or [])
+            rating = round(sum(r.rating for r in reviews) / len(reviews), 1) if reviews else 0.0
+            if rating_min is not None and rating < rating_min:
+                continue
+
+            loc = biz.location or {}
+            biz_lat = loc.get("lat", 0.0)
+            biz_lng = loc.get("lng", 0.0)
+            distance = round(haversine_km(lat, lng, biz_lat, biz_lng), 1) if has_coords else 0.0
+            if has_coords and radius_km is not None and distance > radius_km:
+                continue
+
+            photo_urls = [p.url for p in sorted(
+                biz.photos or [],
+                key=lambda p: (not p.is_cover, p.created_at),
+            )]
+            if services:
+                cheapest = min(services, key=lambda s: s.price_amount)
+                starting_price = MoneyResponse(amount=cheapest.price_amount, currency=cheapest.price_currency)
+            else:
+                starting_price = MoneyResponse(amount=0, currency="KES")
+
+            summary = BusinessSummaryResponse(
+                businessId=biz.id,
+                name=biz.name,
+                categories=biz.categories or [],
+                thumbnailUrl=photo_urls[0] if photo_urls else "",
+                photos=photo_urls,
+                address=loc.get("address", ""),
+                lat=biz_lat,
+                lng=biz_lng,
+                distanceKm=distance,
+                startingPrice=starting_price,
+                rating=rating,
+                reviewCount=len(reviews),
+            )
+            published_ts = biz.published_at.timestamp() if biz.published_at else 0.0
+            rows.append((distance, published_ts, summary))
+
+        if has_coords:
+            rows.sort(key=lambda r: r[0])
+        else:
+            rows.sort(key=lambda r: r[1], reverse=True)
+
+        return SearchResponse(businesses=[r[2] for r in rows])
+
+    # ─── Discovery: profile ────────────────────────────────────
+
+    async def get_business_profile(self, business_id: str) -> BusinessProfileResponse:
+        not_found = HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "message": "No published business found for this id"},
+        )
+        try:
+            bid = uuid_pkg.UUID(str(business_id))
+        except (ValueError, TypeError, AttributeError):
+            raise not_found
+
+        result = await self.db.execute(
+            select(Business)
+            .where(Business.id == bid, Business.status == BusinessStatus.PUBLISHED)
+            .options(
+                selectinload(Business.photos),
+                selectinload(Business.working_hours),
+                selectinload(Business.service_categories).selectinload(ServiceCategory.services),
+                selectinload(Business.policies),
+                selectinload(Business.staff),
+                selectinload(Business.reviews),
+            )
+        )
+        business = result.scalar_one_or_none()
+        if not business:
+            raise not_found
+
+        loc = business.location or {}
+        policies = business.policies
+
+        reviews_sorted = sorted(
+            business.reviews or [], key=lambda r: r.created_at, reverse=True
+        )
+        rating = (
+            round(sum(r.rating for r in reviews_sorted) / len(reviews_sorted), 1)
+            if reviews_sorted
+            else 0.0
+        )
+
+        photo_urls = [p.url for p in sorted(
+            business.photos or [],
+            key=lambda p: (not p.is_cover, p.created_at),
+        )]
+
+        raw_hours = business.working_hours.weekly_hours if business.working_hours else {}
+        working_hours = {day: raw_hours.get(day) for day in _WEEKDAYS}
+
+        profile_policies = ProfilePoliciesResponse(
+            deposit=DepositRuleResponse(
+                required=policies.deposit_required if policies else False,
+                type=policies.deposit_type if policies else None,
+                amount=MoneyResponse(
+                    amount=(policies.deposit_amount or 0) if policies else 0,
+                    currency=(policies.deposit_currency or "KES") if policies else "KES",
+                ),
+                appliesTo=policies.deposit_applies_to if policies else None,
+            ),
+            cancellation=CancellationPolicyResponse(
+                freeCancellationHours=policies.cancellation_free_hours if policies else 24,
+                lateFeePercent=policies.cancellation_late_fee_percent if policies else 50,
+            ),
+            noShow=NoShowPolicyResponse(
+                feePercent=policies.no_show_fee_percent if policies else 100
+            ),
+        )
+
+        services = [
+            ProfileServiceResponse(
+                serviceId=s.id,
+                categoryName=cat.name,
+                name=s.name,
+                durationMinutes=s.duration_minutes,
+                price=MoneyResponse(amount=s.price_amount, currency=s.price_currency),
+            )
+            for cat in (business.service_categories or [])
+            for s in (cat.services or [])
+        ]
+
+        staff = [
+            StaffMemberResponse(
+                staffId=st.id,
+                name=st.name,
+                role=st.role,
+                rating=st.rating,
+                avatarUrl=st.avatar_url,
+                bio=st.bio or "",
+                specialties=st.specialties or [],
+                portfolio=st.portfolio or [],
+            )
+            for st in sorted(business.staff or [], key=lambda st: st.created_at)
+        ]
+
+        review_items = [
+            ReviewResponse(
+                reviewId=r.id,
+                authorName=r.author_name,
+                rating=r.rating,
+                text=r.text or "",
+                createdAt=r.created_at,
+            )
+            for r in reviews_sorted
+        ]
+
+        return BusinessProfileResponse(
+            businessId=business.id,
+            name=business.name,
+            description=business.description or "",
+            categories=business.categories or [],
+            photos=photo_urls,
+            rating=rating,
+            reviewCount=len(reviews_sorted),
+            address=loc.get("address", ""),
+            lat=loc.get("lat", 0.0),
+            lng=loc.get("lng", 0.0),
+            depositSummary=derive_deposit_summary(policies),
+            cancellationSummary=derive_cancellation_summary(policies),
+            workingHours=working_hours,
+            policies=profile_policies,
+            amenities=business.amenities or [],
+            services=services,
+            staff=staff,
+            reviews=review_items,
         )

@@ -550,7 +550,10 @@ async def test_invite_team_member_duplicate(client: AsyncClient, auth_headers: d
 
 
 @pytest.mark.asyncio
-async def test_publish_business(client: AsyncClient, auth_headers: dict):
+async def test_publish_business(client: AsyncClient, auth_headers: dict, db_session, test_user):
+    from sqlalchemy import select
+    from app.modules.business.models import Staff
+
     create_resp = await client.post(
         "/api/v1/businesses",
         json={
@@ -608,6 +611,15 @@ async def test_publish_business(client: AsyncClient, auth_headers: dict):
     assert data["status"] == "published"
     assert data["visible"] is True
     assert data["publishedAt"] is not None
+
+    staff_rows = (
+        (await db_session.execute(select(Staff).where(Staff.business_id == uuid.UUID(biz_id))))
+        .scalars()
+        .all()
+    )
+    assert len(staff_rows) == 1
+    assert staff_rows[0].role == "owner"
+    assert staff_rows[0].user_id == test_user.id
 
 
 @pytest.mark.asyncio

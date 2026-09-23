@@ -1,3 +1,4 @@
+from typing import Optional
 from fastapi import APIRouter, Depends, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -5,6 +6,7 @@ from app.core.database import get_db
 from app.core.dependencies import get_current_verified_user
 from app.modules.auth.models import User
 from app.modules.business.schemas import (
+    BusinessProfileResponse,
     CreateBusinessRequest,
     CreateServiceCategoryRequest,
     CreateServiceRequest,
@@ -13,6 +15,7 @@ from app.modules.business.schemas import (
     PublishBusinessRequest,
     RespondToInvitationRequest,
     RespondToInvitationResponse,
+    SearchResponse,
     SetPaymentDestinationRequest,
     SetPoliciesRequest,
     SetTeamModeRequest,
@@ -22,6 +25,44 @@ from app.modules.business.service import BusinessService
 
 router = APIRouter(prefix="/businesses", tags=["Business Setup"])
 team_router = APIRouter(tags=["Team"])
+discovery_router = APIRouter(prefix="/businesses", tags=["Discovery"])
+
+
+# ─── Discovery (public) ────────────────────────────────────────
+# Registered on its own router so main.py can mount it BEFORE `router`;
+# otherwise GET /businesses/search would be swallowed by GET /businesses/{id}.
+
+
+@discovery_router.get("/search", response_model=SearchResponse)
+async def search_businesses(
+    lat: Optional[float] = None,
+    lng: Optional[float] = None,
+    query: Optional[str] = None,
+    category: Optional[str] = None,
+    priceMax: Optional[int] = None,
+    ratingMin: Optional[float] = None,
+    radiusKm: Optional[float] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    service = BusinessService(db)
+    return await service.search_businesses(
+        lat=lat,
+        lng=lng,
+        query=query,
+        category=category,
+        price_max=priceMax,
+        rating_min=ratingMin,
+        radius_km=radiusKm,
+    )
+
+
+@discovery_router.get("/{business_id}/profile", response_model=BusinessProfileResponse)
+async def get_business_profile(
+    business_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    service = BusinessService(db)
+    return await service.get_business_profile(business_id)
 
 
 @router.post("", status_code=201)
