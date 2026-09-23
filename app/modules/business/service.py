@@ -98,11 +98,29 @@ class BusinessService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
+    @staticmethod
+    def _parse_path_id(raw: str, entity: str) -> uuid_pkg.UUID:
+        try:
+            return uuid_pkg.UUID(str(raw))
+        except (ValueError, TypeError, AttributeError):
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "message": f"{entity} does not exist for this business"},
+            )
+
     async def _get_owned_business(self, business_id: str, user_id: str) -> Business:
+        try:
+            bid = uuid_pkg.UUID(str(business_id))
+            uid = uuid_pkg.UUID(str(user_id))
+        except (ValueError, TypeError, AttributeError):
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "message": "Business not found"},
+            )
         result = await self.db.execute(
             select(Business).where(
-                Business.id == business_id,
-                Business.owner_id == user_id,
+                Business.id == bid,
+                Business.owner_id == uid,
             )
         )
         business = result.scalar_one_or_none()
@@ -114,6 +132,14 @@ class BusinessService:
         return business
 
     async def _get_business_with_relations(self, business_id: str, user_id: str) -> Business:
+        try:
+            bid = uuid_pkg.UUID(str(business_id))
+            uid = uuid_pkg.UUID(str(user_id))
+        except (ValueError, TypeError, AttributeError):
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "message": "Business not found"},
+            )
         result = await self.db.execute(
             select(Business)
             .options(
@@ -124,8 +150,8 @@ class BusinessService:
                 selectinload(Business.payment_destination),
             )
             .where(
-                Business.id == business_id,
-                Business.owner_id == user_id,
+                Business.id == bid,
+                Business.owner_id == uid,
             )
         )
         business = result.scalar_one_or_none()
@@ -332,7 +358,7 @@ class BusinessService:
 
     async def delete_photo(self, business_id: str, user_id: str, photo_id: str) -> None:
         business = await self._get_owned_business(business_id, user_id)
-        photo = await self.db.get(BusinessPhoto, photo_id)
+        photo = await self.db.get(BusinessPhoto, self._parse_path_id(photo_id, "photoId"))
         if not photo or photo.business_id != business.id:
             raise HTTPException(
                 status_code=404,
@@ -496,7 +522,7 @@ class BusinessService:
     ) -> ServiceResponse:
         business = await self._get_owned_business(business_id, user_id)
 
-        service = await self.db.get(Service, service_id)
+        service = await self.db.get(Service, self._parse_path_id(service_id, "serviceId"))
         if not service or service.business_id != business.id:
             raise HTTPException(
                 status_code=404,
@@ -527,7 +553,7 @@ class BusinessService:
 
     async def delete_service(self, business_id: str, user_id: str, service_id: str) -> None:
         business = await self._get_owned_business(business_id, user_id)
-        service = await self.db.get(Service, service_id)
+        service = await self.db.get(Service, self._parse_path_id(service_id, "serviceId"))
         if not service or service.business_id != business.id:
             raise HTTPException(
                 status_code=404,
@@ -538,7 +564,7 @@ class BusinessService:
 
     async def delete_service_category(self, business_id: str, user_id: str, category_id: str) -> None:
         business = await self._get_owned_business(business_id, user_id)
-        category = await self.db.get(ServiceCategory, category_id)
+        category = await self.db.get(ServiceCategory, self._parse_path_id(category_id, "categoryId"))
         if not category or category.business_id != business.id:
             raise HTTPException(
                 status_code=404,
@@ -831,7 +857,7 @@ class BusinessService:
 
     async def respond_to_invitation(self, invitation_id: str, user_id: str, data):
         from app.modules.business.schemas import RespondToInvitationResponse
-        invitation = await self.db.get(TeamInvitation, invitation_id)
+        invitation = await self.db.get(TeamInvitation, self._parse_path_id(invitation_id, "invitationId"))
         if not invitation:
             raise HTTPException(status_code=404, detail={"error": "not_found", "message": "No pending invitation found for this id"})
         if invitation.status != InvitationStatus.PENDING:
