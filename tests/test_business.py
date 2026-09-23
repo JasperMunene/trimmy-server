@@ -11,6 +11,7 @@ async def test_create_business(client: AsyncClient, auth_headers: dict):
         "/api/v1/businesses",
         json={
             "name": "Glow Beauty Lounge",
+            "description": "A cosy beauty lounge in Kilimani.",
             "categories": ["hair_salon", "nail_salon"],
             "phone": "+254712345678",
             "location": {
@@ -27,6 +28,7 @@ async def test_create_business(client: AsyncClient, auth_headers: dict):
     assert resp.status_code == 201
     data = resp.json()
     assert data["name"] == "Glow Beauty Lounge"
+    assert data["description"] == "A cosy beauty lounge in Kilimani."
     assert data["categories"] == ["hair_salon", "nail_salon"]
     assert data["status"] == "draft"
     assert data["onboardingStep"] == "business_basics"
@@ -842,3 +844,289 @@ async def test_respond_to_invitation_already_responded(client: AsyncClient, auth
     )
     assert resp.status_code == 409
     assert resp.json()["error"] == "already_responded"
+
+
+# ─── Business management (post-publish) ──────────────────────
+
+
+async def _create_business(client: AsyncClient, auth_headers: dict, *, name: str, phone: str) -> str:
+    resp = await client.post(
+        "/api/v1/businesses",
+        json={
+            "name": name,
+            "description": "Original description",
+            "categories": ["hair_salon"],
+            "phone": phone,
+            "location": {"address": "Nairobi", "lat": -1.29, "lng": 36.78},
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()["businessId"]
+
+
+@pytest.mark.asyncio
+async def test_update_business_info(client: AsyncClient, auth_headers: dict):
+    biz_id = await _create_business(client, auth_headers, name="Edit Me", phone="+254730000001")
+
+    resp = await client.patch(
+        f"/api/v1/businesses/{biz_id}",
+        json={
+            "name": "Edited Salon",
+            "description": "Updated description",
+            "categories": ["spa", "beauty"],
+            "phone": "+254730000001",
+            "location": {"address": "Westlands, Nairobi", "lat": -1.26, "lng": 36.80},
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["name"] == "Edited Salon"
+    assert data["description"] == "Updated description"
+    assert data["categories"] == ["spa", "beauty"]
+    assert data["phone"] == "+254730000001"
+    assert data["location"]["address"] == "Westlands, Nairobi"
+
+
+@pytest.mark.asyncio
+async def test_update_business_duplicate_phone(client: AsyncClient, auth_headers: dict):
+    await _create_business(client, auth_headers, name="Phone Holder", phone="+254730000002")
+    biz_id = await _create_business(client, auth_headers, name="Phone Changer", phone="+254730000003")
+
+    resp = await client.patch(
+        f"/api/v1/businesses/{biz_id}",
+        json={
+            "name": "Phone Changer",
+            "description": "x",
+            "categories": ["spa"],
+            "phone": "+254730000002",
+            "location": {"address": "Nairobi", "lat": 0, "lng": 0},
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 409
+    assert resp.json()["error"] == "phone_already_registered"
+
+
+@pytest.mark.asyncio
+async def test_update_business_not_found(client: AsyncClient, auth_headers: dict):
+    resp = await client.patch(
+        f"/api/v1/businesses/{uuid.uuid4()}",
+        json={
+            "name": "X",
+            "description": "x",
+            "categories": ["spa"],
+            "phone": "+254730000004",
+            "location": {"address": "Nairobi", "lat": 0, "lng": 0},
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 404
+    assert resp.json()["error"] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_delete_business_photo_promotes_next_cover(
+    client: AsyncClient, auth_headers: dict
+):
+    biz_id = await _create_business(client, auth_headers, name="Photo Del", phone="+254730000005")
+
+    cover = await client.post(
+        f"/api/v1/businesses/{biz_id}/photos",
+        files={"photo": ("cover.jpg", b"cover_bytes", "image/jpeg")},
+        data={"isCover": "true"},
+        headers=auth_headers,
+    )
+    assert cover.status_code == 201
+    gallery = await client.post(
+        f"/api/v1/businesses/{biz_id}/photos",
+        files={"photo": ("g.jpg", b"gallery_bytes", "image/jpeg")},
+        data={"isCover": "false"},
+        headers=auth_headers,
+    )
+    assert gallery.status_code == 201
+
+    resp = await client.delete(
+        f"/api/v1/businesses/{biz_id}/photos/{cover.json()['photoId']}",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 204
+
+    draft = await client.get(f"/api/v1/businesses/{biz_id}", headers=auth_headers)
+    photos = draft.json()["photos"]
+    assert len(photos) == 1
+    assert photos[0]["photoId"] == gallery.json()["photoId"]
+    assert photos[0]["isCover"] is True
+
+
+@pytest.mark.asyncio
+async def test_delete_business_photo_not_found(client: AsyncClient, auth_headers: dict):
+    biz_id = await _create_business(client, auth_headers, name="Photo 404", phone="+254730000006")
+    resp = await client.delete(
+        f"/api/v1/businesses/{biz_id}/photos/{uuid.uuid4()}",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 404
+    assert resp.json()["error"] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_update_service(client: AsyncClient, auth_headers: dict):
+    biz_id = await _create_business(client, auth_headers, name="Svc Edit", phone="+254730000007")
+    cat = await client.post(
+        f"/api/v1/businesses/{biz_id}/service-categories",
+        json={"name": "Haircuts"},
+        headers=auth_headers,
+    )
+    svc = await client.post(
+        f"/api/v1/businesses/{biz_id}/services",
+        json={
+            "categoryId": cat.json()["categoryId"],
+            "name": "Classic Cut",
+            "durationMinutes": 30,
+            "price": {"amount": 500, "currency": "KES"},
+        },
+        headers=auth_headers,
+    )
+    assert svc.status_code == 201
+    service_id = svc.json()["serviceId"]
+
+    resp = await client.patch(
+        f"/api/v1/businesses/{biz_id}/services/{service_id}",
+        json={
+            "name": "Executive Cut",
+            "durationMinutes": 45,
+            "price": {"amount": 900, "currency": "KES"},
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["name"] == "Executive Cut"
+    assert data["durationMinutes"] == 45
+    assert data["price"]["amount"] == 900
+    assert data["categoryId"] == cat.json()["categoryId"]
+
+
+@pytest.mark.asyncio
+async def test_update_service_zero_price(client: AsyncClient, auth_headers: dict):
+    biz_id = await _create_business(client, auth_headers, name="Svc Zero", phone="+254730000008")
+    cat = await client.post(
+        f"/api/v1/businesses/{biz_id}/service-categories",
+        json={"name": "Cuts"},
+        headers=auth_headers,
+    )
+    svc = await client.post(
+        f"/api/v1/businesses/{biz_id}/services",
+        json={
+            "categoryId": cat.json()["categoryId"],
+            "name": "Cut",
+            "durationMinutes": 30,
+            "price": {"amount": 500, "currency": "KES"},
+        },
+        headers=auth_headers,
+    )
+    resp = await client.patch(
+        f"/api/v1/businesses/{biz_id}/services/{svc.json()['serviceId']}",
+        json={"name": "Free", "durationMinutes": 30, "price": {"amount": 0, "currency": "KES"}},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "validation_error"
+
+
+@pytest.mark.asyncio
+async def test_update_service_not_found(client: AsyncClient, auth_headers: dict):
+    biz_id = await _create_business(client, auth_headers, name="Svc 404", phone="+254730000009")
+    resp = await client.patch(
+        f"/api/v1/businesses/{biz_id}/services/{uuid.uuid4()}",
+        json={"name": "X", "durationMinutes": 30, "price": {"amount": 100, "currency": "KES"}},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 404
+    assert resp.json()["error"] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_delete_service(client: AsyncClient, auth_headers: dict):
+    biz_id = await _create_business(client, auth_headers, name="Svc Del", phone="+254730000010")
+    cat = await client.post(
+        f"/api/v1/businesses/{biz_id}/service-categories",
+        json={"name": "Cuts"},
+        headers=auth_headers,
+    )
+    svc = await client.post(
+        f"/api/v1/businesses/{biz_id}/services",
+        json={
+            "categoryId": cat.json()["categoryId"],
+            "name": "Cut",
+            "durationMinutes": 30,
+            "price": {"amount": 500, "currency": "KES"},
+        },
+        headers=auth_headers,
+    )
+
+    resp = await client.delete(
+        f"/api/v1/businesses/{biz_id}/services/{svc.json()['serviceId']}",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 204
+
+    cats_resp = await client.get(
+        f"/api/v1/businesses/{biz_id}/service-categories", headers=auth_headers
+    )
+    assert cats_resp.json()["categories"][0]["services"] == []
+
+
+@pytest.mark.asyncio
+async def test_delete_service_not_found(client: AsyncClient, auth_headers: dict):
+    biz_id = await _create_business(client, auth_headers, name="Svc Del 404", phone="+254730000011")
+    resp = await client.delete(
+        f"/api/v1/businesses/{biz_id}/services/{uuid.uuid4()}",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_service_category_cascades_services(
+    client: AsyncClient, auth_headers: dict
+):
+    biz_id = await _create_business(client, auth_headers, name="Cat Del", phone="+254730000012")
+    cat = await client.post(
+        f"/api/v1/businesses/{biz_id}/service-categories",
+        json={"name": "Nails"},
+        headers=auth_headers,
+    )
+    cat_id = cat.json()["categoryId"]
+    await client.post(
+        f"/api/v1/businesses/{biz_id}/services",
+        json={
+            "categoryId": cat_id,
+            "name": "Manicure",
+            "durationMinutes": 40,
+            "price": {"amount": 800, "currency": "KES"},
+        },
+        headers=auth_headers,
+    )
+
+    resp = await client.delete(
+        f"/api/v1/businesses/{biz_id}/service-categories/{cat_id}",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 204
+
+    draft = await client.get(f"/api/v1/businesses/{biz_id}", headers=auth_headers)
+    assert draft.json()["serviceCategories"] == []
+
+
+@pytest.mark.asyncio
+async def test_delete_service_category_not_found(client: AsyncClient, auth_headers: dict):
+    biz_id = await _create_business(client, auth_headers, name="Cat 404", phone="+254730000013")
+    resp = await client.delete(
+        f"/api/v1/businesses/{biz_id}/service-categories/{uuid.uuid4()}",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 404
+    assert resp.json()["error"] == "not_found"

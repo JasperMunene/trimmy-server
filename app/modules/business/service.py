@@ -58,6 +58,8 @@ from app.modules.business.schemas import (
     StaffMemberResponse,
     TeamInvitationResponse,
     TeamModeResponse,
+    UpdateBusinessResponse,
+    UpdateServiceRequest,
     WorkingHoursResponse,
 )
 
@@ -164,12 +166,44 @@ class BusinessService:
         return CreateBusinessResponse(
             businessId=business.id,
             name=business.name,
+            description=business.description,
             categories=business.categories,
             phone=business.phone,
             location=LocationResponse(**business.location),
             status=business.status,
             onboardingStep=business.onboarding_step,
             createdAt=business.created_at,
+        )
+
+    # ─── update-business-info ────────────────────────────────
+
+    async def update_business(self, business_id: str, user_id: str, data: CreateBusinessRequest) -> UpdateBusinessResponse:
+        business = await self._get_owned_business(business_id, user_id)
+
+        if data.phone != business.phone:
+            phone_check = await self.db.execute(
+                select(Business).where(Business.phone == data.phone)
+            )
+            if phone_check.scalar_one_or_none():
+                raise HTTPException(
+                    status_code=409,
+                    detail={"error": "phone_already_registered", "message": "A business already exists for this phone number"},
+                )
+
+        business.name = data.name
+        business.description = data.description
+        business.categories = data.categories
+        business.phone = data.phone
+        business.location = data.location.model_dump()
+        await self.db.commit()
+        await self.db.refresh(business)
+
+        return UpdateBusinessResponse(
+            name=business.name,
+            description=business.description,
+            categories=business.categories,
+            phone=business.phone,
+            location=LocationResponse(**business.location),
         )
 
     # ─── get-business-draft ──────────────────────────────────
@@ -295,6 +329,31 @@ class BusinessService:
             isCover=photo.is_cover,
             createdAt=photo.created_at,
         )
+
+    async def delete_photo(self, business_id: str, user_id: str, photo_id: str) -> None:
+        business = await self._get_owned_business(business_id, user_id)
+        photo = await self.db.get(BusinessPhoto, photo_id)
+        if not photo or photo.business_id != business.id:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "message": "photoId does not exist for this business"},
+            )
+
+        was_cover = photo.is_cover
+        await self.db.delete(photo)
+
+        if was_cover:
+            remaining = (
+                await self.db.execute(
+                    select(BusinessPhoto)
+                    .where(BusinessPhoto.business_id == business.id)
+                    .order_by(BusinessPhoto.created_at)
+                )
+            ).scalars().all()
+            if remaining:
+                remaining[0].is_cover = True
+
+        await self.db.commit()
 
     # ─── set-working-hours ───────────────────────────────────
 
@@ -429,6 +488,64 @@ class BusinessService:
             price=MoneyResponse(amount=service.price_amount, currency=service.price_currency),
             createdAt=service.created_at,
         )
+
+    # ─── update-service ──────────────────────────────────────
+
+    async def update_service(
+        self, business_id: str, user_id: str, service_id: str, data: UpdateServiceRequest
+    ) -> ServiceResponse:
+        business = await self._get_owned_business(business_id, user_id)
+
+        service = await self.db.get(Service, service_id)
+        if not service or service.business_id != business.id:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "message": "serviceId does not exist for this business"},
+            )
+        if data.price.amount <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "validation_error", "message": "price.amount must be greater than 0"},
+            )
+
+        service.name = data.name
+        service.duration_minutes = data.duration_minutes
+        service.price_amount = data.price.amount
+        service.price_currency = data.price.currency
+        await self.db.commit()
+        await self.db.refresh(service)
+
+        return ServiceResponse(
+            serviceId=service.id,
+            businessId=service.business_id,
+            categoryId=service.category_id,
+            name=service.name,
+            durationMinutes=service.duration_minutes,
+            price=MoneyResponse(amount=service.price_amount, currency=service.price_currency),
+            createdAt=service.created_at,
+        )
+
+    async def delete_service(self, business_id: str, user_id: str, service_id: str) -> None:
+        business = await self._get_owned_business(business_id, user_id)
+        service = await self.db.get(Service, service_id)
+        if not service or service.business_id != business.id:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "message": "serviceId does not exist for this business"},
+            )
+        await self.db.delete(service)
+        await self.db.commit()
+
+    async def delete_service_category(self, business_id: str, user_id: str, category_id: str) -> None:
+        business = await self._get_owned_business(business_id, user_id)
+        category = await self.db.get(ServiceCategory, category_id)
+        if not category or category.business_id != business.id:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "message": "categoryId does not exist for this business"},
+            )
+        await self.db.delete(category)
+        await self.db.commit()
 
     # ─── set-policies ────────────────────────────────────────
 

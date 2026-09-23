@@ -47,12 +47,23 @@ class CreateBusinessRequest(BaseModel):
 class CreateBusinessResponse(BaseModel):
     business_id: uuid_pkg.UUID = Field(alias="businessId")
     name: str
+    description: Optional[str] = None
     categories: List[str]
     phone: str
     location: LocationResponse
     status: str
     onboarding_step: Optional[str] = Field(None, alias="onboardingStep")
     created_at: datetime = Field(alias="createdAt")
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+class UpdateBusinessResponse(BaseModel):
+    name: str
+    description: Optional[str] = None
+    categories: List[str]
+    phone: str
+    location: LocationResponse
 
     model_config = {"from_attributes": True, "populate_by_name": True}
 
@@ -134,6 +145,14 @@ class CreateServiceRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     duration_minutes: int = Field(alias="durationMinutes", gt=0)
     price: MoneyResponse
+
+
+class UpdateServiceRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    duration_minutes: int = Field(alias="durationMinutes", gt=0)
+    price: MoneyResponse
+
+    model_config = {"populate_by_name": True}
 
 
 class ServiceResponse(BaseModel):
