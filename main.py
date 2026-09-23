@@ -12,6 +12,7 @@ from slowapi.util import get_remote_address
 
 from app.core.config import settings
 from app.modules.auth.router import router as auth_router
+from app.modules.business.router import discovery_router
 from app.modules.business.router import router as business_router
 from app.modules.business.router import team_router
 
@@ -46,6 +47,9 @@ app.add_middleware(
 )
 
 app.include_router(auth_router, prefix=settings.API_V1_STR)
+# discovery_router must precede business_router: its GET /businesses/search
+# would otherwise match the authed GET /businesses/{business_id} route.
+app.include_router(discovery_router, prefix=settings.API_V1_STR)
 app.include_router(business_router, prefix=settings.API_V1_STR)
 app.include_router(team_router, prefix=settings.API_V1_STR)
 

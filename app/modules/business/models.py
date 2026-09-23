@@ -56,6 +56,8 @@ class Business(Base):
     )
     name: Mapped[str] = mapped_column(Text, nullable=False)
     phone: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    amenities: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     categories: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     location: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default=BusinessStatus.DRAFT, index=True)
@@ -82,6 +84,12 @@ class Business(Base):
         back_populates="business", uselist=False, cascade="all, delete-orphan"
     )
     team_invitations: Mapped[list["TeamInvitation"]] = relationship(
+        back_populates="business", cascade="all, delete-orphan"
+    )
+    staff: Mapped[list["Staff"]] = relationship(
+        back_populates="business", cascade="all, delete-orphan"
+    )
+    reviews: Mapped[list["Review"]] = relationship(
         back_populates="business", cascade="all, delete-orphan"
     )
 
@@ -222,3 +230,45 @@ class TeamInvitation(Base):
     )
 
     business: Mapped["Business"] = relationship(back_populates="team_invitations")
+
+
+class Staff(Base):
+    __tablename__ = "staff"
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(UUID, primary_key=True, default=uuid4)
+    business_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID, ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[Optional[uuid_pkg.UUID]] = mapped_column(UUID, nullable=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    role: Mapped[str] = mapped_column(String(50), nullable=False)
+    rating: Mapped[float] = mapped_column(Float, default=0.0)
+    avatar_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    bio: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    specialties: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    portfolio: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    business: Mapped["Business"] = relationship(back_populates="staff")
+
+
+class Review(Base):
+    __tablename__ = "reviews"
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(UUID, primary_key=True, default=uuid4)
+    business_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID, ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    staff_id: Mapped[Optional[uuid_pkg.UUID]] = mapped_column(
+        UUID, ForeignKey("staff.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    author_name: Mapped[str] = mapped_column(Text, nullable=False)
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    business: Mapped["Business"] = relationship(back_populates="reviews")

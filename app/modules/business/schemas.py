@@ -40,6 +40,8 @@ class CreateBusinessRequest(BaseModel):
     categories: List[str] = Field(..., min_length=1)
     phone: str = Field(..., min_length=1)
     location: LocationRequest
+    description: Optional[str] = None
+    amenities: Optional[List[str]] = None
 
 
 class CreateBusinessResponse(BaseModel):
@@ -62,6 +64,8 @@ class GetBusinessResponse(BaseModel):
     name: str
     categories: Optional[List[str]] = None
     phone: str
+    description: Optional[str] = None
+    amenities: Optional[List[str]] = None
     location: Optional[LocationResponse] = None
     photos: Optional[List["PhotoResponse"]] = []
     working_hours: Optional["WorkingHoursResponse"] = Field(None, alias="workingHours")
@@ -298,3 +302,114 @@ class PublishBusinessResponse(BaseModel):
     published_at: Optional[datetime] = Field(None, alias="publishedAt")
 
     model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+# ─── Discovery: Search ───────────────────────────────────────
+
+class BusinessSummaryResponse(BaseModel):
+    business_id: uuid_pkg.UUID = Field(alias="businessId")
+    name: str
+    categories: List[str]
+    thumbnail_url: Optional[str] = Field(None, alias="thumbnailUrl")
+    photos: List[str]
+    address: str
+    lat: float
+    lng: float
+    distance_km: Optional[float] = Field(None, alias="distanceKm")
+    starting_price: Optional[MoneyResponse] = Field(None, alias="startingPrice")
+    rating: float
+    review_count: int = Field(alias="reviewCount")
+
+    model_config = {"populate_by_name": True}
+
+
+class SearchResponse(BaseModel):
+    businesses: List[BusinessSummaryResponse]
+
+
+# ─── Discovery: Profile ──────────────────────────────────────
+
+class ProfileServiceResponse(BaseModel):
+    service_id: uuid_pkg.UUID = Field(alias="serviceId")
+    category_name: str = Field(alias="categoryName")
+    name: str
+    duration_minutes: int = Field(alias="durationMinutes")
+    price: MoneyResponse
+
+    model_config = {"populate_by_name": True}
+
+
+class StaffMemberResponse(BaseModel):
+    staff_id: uuid_pkg.UUID = Field(alias="staffId")
+    name: str
+    role: str
+    rating: float
+    avatar_url: Optional[str] = Field(None, alias="avatarUrl")
+    bio: Optional[str] = None
+    specialties: List[str]
+    portfolio: List[str]
+
+    model_config = {"populate_by_name": True}
+
+
+class ReviewResponse(BaseModel):
+    review_id: uuid_pkg.UUID = Field(alias="reviewId")
+    author_name: str = Field(alias="authorName")
+    rating: int
+    text: Optional[str] = None
+    created_at: datetime = Field(alias="createdAt")
+
+    model_config = {"populate_by_name": True}
+
+
+class DepositRuleResponse(BaseModel):
+    required: bool
+    type: Optional[str] = None
+    amount: MoneyResponse
+    applies_to: Optional[str] = Field(None, alias="appliesTo")
+
+    model_config = {"populate_by_name": True}
+
+
+class CancellationPolicyResponse(BaseModel):
+    free_cancellation_hours: int = Field(alias="freeCancellationHours")
+    late_fee_percent: int = Field(alias="lateFeePercent")
+
+    model_config = {"populate_by_name": True}
+
+
+class NoShowPolicyResponse(BaseModel):
+    fee_percent: int = Field(alias="feePercent")
+
+    model_config = {"populate_by_name": True}
+
+
+class ProfilePoliciesResponse(BaseModel):
+    deposit: DepositRuleResponse
+    cancellation: CancellationPolicyResponse
+    no_show: NoShowPolicyResponse = Field(alias="noShow")
+
+    model_config = {"populate_by_name": True}
+
+
+class BusinessProfileResponse(BaseModel):
+    business_id: uuid_pkg.UUID = Field(alias="businessId")
+    name: str
+    description: str
+    categories: List[str]
+    photos: List[str]
+    rating: float
+    review_count: int = Field(alias="reviewCount")
+    address: str
+    lat: float
+    lng: float
+    deposit_summary: str = Field(alias="depositSummary")
+    cancellation_summary: str = Field(alias="cancellationSummary")
+    working_hours: dict = Field(alias="workingHours")
+    policies: ProfilePoliciesResponse
+    amenities: List[str]
+    services: List[ProfileServiceResponse]
+    staff: List[StaffMemberResponse]
+    reviews: List[ReviewResponse]
+
+    model_config = {"populate_by_name": True}
