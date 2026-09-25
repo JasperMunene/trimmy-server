@@ -1,5 +1,6 @@
 import asyncio
 import os
+import tempfile
 import uuid
 
 import pytest
@@ -10,9 +11,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+# Never touch the real R2 bucket from tests, even though .env configures it.
+os.environ["STORAGE_BACKEND"] = "local"
+os.environ["MEDIA_ROOT"] = tempfile.mkdtemp(prefix="trimmy-test-media-")
 
 from app.core.base import Base
 from app.core.database import get_db
+from app.core.rate_limit import limiter
 from app.core.security import create_access_token, get_password_hash
 from app.modules.auth.models import AuthType, User
 from main import app
@@ -26,6 +31,11 @@ def event_loop():
     loop = asyncio.new_event_loop()
     yield loop
     loop.close()
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limits():
+    limiter.reset()
 
 
 @pytest_asyncio.fixture(autouse=True)

@@ -1,12 +1,16 @@
+import logging
+import re
 from datetime import datetime, timezone
 from math import asin, cos, radians, sin, sqrt
 from typing import Optional
 import uuid as uuid_pkg
-from fastapi import HTTPException
-from sqlalchemy import select
+from fastapi import HTTPException, UploadFile
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.config import settings
+from app.core.storage import IMAGE_TYPES, DirectUploadUnsupported, get_storage, sniff_image
 from app.modules.auth.models import User
 from app.modules.business.models import (
     Business,
@@ -27,22 +31,28 @@ from app.modules.business.models import (
     WorkingHours,
 )
 from app.modules.business.schemas import (
+    AddTeamMemberRequest,
     BusinessProfileResponse,
     BusinessSummaryResponse,
     CancellationPolicyResponse,
+    CompletePhotoUploadRequest,
     CreateBusinessRequest,
     CreateBusinessResponse,
     CreateServiceCategoryRequest,
     CreateServiceRequest,
     DepositRuleResponse,
     GetBusinessResponse,
+    DayHoursResponse,
     InviteTeamMemberRequest,
     ListServiceCategoriesResponse,
+    ListTeamMembersResponse,
     LocationResponse,
     MoneyResponse,
     NoShowPolicyResponse,
     PaymentDestinationResponse,
     PhotoResponse,
+    PhotoUploadUrlRequest,
+    PhotoUploadUrlResponse,
     PoliciesResponse,
     ProfilePoliciesResponse,
     ProfileServiceResponse,
@@ -51,17 +61,24 @@ from app.modules.business.schemas import (
     ReviewResponse,
     SearchResponse,
     ServiceCategoryResponse,
+    ServiceCategoryWithServicesResponse,
     ServiceResponse,
     SetPaymentDestinationRequest,
     SetPoliciesRequest,
     SetTeamModeRequest,
     StaffMemberResponse,
-    TeamInvitationResponse,
+    TeamMemberResponse,
     TeamModeResponse,
     UpdateBusinessResponse,
     UpdateServiceRequest,
+    UpdateTeamMemberRequest,
+    WeeklyHoursRequest,
+    WeeklyHoursResponse,
     WorkingHoursResponse,
 )
+from app.modules.business.tasks import delete_stored_object
+
+logger = logging.getLogger(__name__)
 
 
 _WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
@@ -78,9 +95,9 @@ def haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
 def derive_deposit_summary(policies: Optional[BusinessPolicies]) -> str:
     if not policies or not policies.deposit_required:
         return "No deposit required"
-    amount = policies.deposit_amount or 0
     if policies.deposit_type == "percent":
-        return f"{amount}% deposit required"
+        return f"{policies.deposit_percent or 0}% deposit required"
+    amount = policies.deposit_amount or 0
     currency = policies.deposit_currency or "KES"
     return f"{currency} {amount} deposit required"
 
@@ -91,6 +108,107 @@ def derive_cancellation_summary(policies: Optional[BusinessPolicies]) -> str:
     return (
         f"Free cancellation up to {policies.cancellation_free_hours}h before, "
         f"{policies.cancellation_late_fee_percent}% fee after"
+    )
+
+
+def _validation_error(message: str) -> HTTPException:
+    return HTTPException(status_code=400, detail={"error": "validation_error", "message": message})
+
+
+# ─── Response builders (shared so every endpoint returns the same shapes) ──
+
+
+def weekly_hours_response(raw: Optional[dict]) -> WeeklyHoursResponse:
+    # Tolerates rows saved before hours were validated: anything malformed reads as closed.
+    raw = raw or {}
+    days = {}
+    for day in _WEEKDAYS:
+        hours = raw.get(day)
+        valid = isinstance(hours, dict) and isinstance(hours.get("open"), str) and isinstance(hours.get("close"), str)
+        days[day] = DayHoursResponse(open=hours["open"], close=hours["close"]) if valid else None
+    return WeeklyHoursResponse(**days)
+
+
+def service_response(s: Service) -> ServiceResponse:
+    return ServiceResponse(
+        serviceId=s.id,
+        businessId=s.business_id,
+        categoryId=s.category_id,
+        name=s.name,
+        durationMinutes=s.duration_minutes,
+        price=MoneyResponse(amount=s.price_amount, currency=s.price_currency),
+        createdAt=s.created_at,
+    )
+
+
+def category_response(cat: ServiceCategory) -> ServiceCategoryWithServicesResponse:
+    return ServiceCategoryWithServicesResponse(
+        categoryId=cat.id,
+        businessId=cat.business_id,
+        name=cat.name,
+        createdAt=cat.created_at,
+        services=[service_response(s) for s in sorted(cat.services, key=lambda s: s.created_at)],
+    )
+
+
+def deposit_response(p: Optional[BusinessPolicies]) -> DepositRuleResponse:
+    if not p:
+        return DepositRuleResponse(required=False, amount=MoneyResponse(amount=0, currency="KES"))
+    is_percent = p.deposit_type == "percent"
+    return DepositRuleResponse(
+        required=p.deposit_required,
+        type=p.deposit_type,
+        amount=None if is_percent else MoneyResponse(amount=p.deposit_amount or 0, currency=p.deposit_currency or "KES"),
+        percent=p.deposit_percent if is_percent else None,
+        appliesTo=p.deposit_applies_to,
+        serviceIds=p.deposit_service_ids or [],
+    )
+
+
+def policies_response(business: Business, p: BusinessPolicies) -> PoliciesResponse:
+    return PoliciesResponse(
+        businessId=business.id,
+        deposit=deposit_response(p),
+        cancellation=CancellationPolicyResponse(
+            freeCancellationHours=p.cancellation_free_hours,
+            lateFeePercent=p.cancellation_late_fee_percent,
+        ),
+        noShow=NoShowPolicyResponse(feePercent=p.no_show_fee_percent),
+        onboardingStep=business.onboarding_step,
+    )
+
+
+def payment_destination_response(business: Business, pd: PaymentDestination) -> PaymentDestinationResponse:
+    return PaymentDestinationResponse(
+        businessId=pd.business_id,
+        type=pd.type,
+        tillNumber=pd.till_number,
+        paybillNumber=pd.paybill_number,
+        paybillAccountNumber=pd.paybill_account_number,
+        bankName=pd.bank_name,
+        bankShortcode=pd.bank_shortcode,
+        bankAccountNumber=pd.bank_account_number,
+        verificationStatus=pd.verification_status,
+        onboardingStep=business.onboarding_step,
+    )
+
+
+def photo_response(p: BusinessPhoto) -> PhotoResponse:
+    return PhotoResponse(photoId=p.id, businessId=p.business_id, url=p.url, isCover=p.is_cover, createdAt=p.created_at)
+
+
+def team_member_response(inv: TeamInvitation) -> TeamMemberResponse:
+    return TeamMemberResponse(
+        invitationId=inv.id,
+        businessId=inv.business_id,
+        name=inv.name,
+        email=inv.email,
+        phone=inv.phone,
+        role=inv.role,
+        status=inv.status,
+        commissionPercent=inv.commission_percent if inv.commission_percent is not None else 40,
+        workingDays=inv.working_days,
+        sentAt=inv.sent_at,
     )
 
 
@@ -237,81 +355,11 @@ class BusinessService:
     async def get_business(self, business_id: str, user_id: str) -> GetBusinessResponse:
         business = await self._get_business_with_relations(business_id, user_id)
 
-        photos = [
-            PhotoResponse(
-                photoId=p.id,
-                businessId=p.business_id,
-                url=p.url,
-                isCover=p.is_cover,
-                createdAt=p.created_at,
-            )
-            for p in (business.photos or [])
-        ]
-
         working_hours = None
         if business.working_hours:
             working_hours = WorkingHoursResponse(
                 businessId=business.working_hours.business_id,
-                weeklyHours=business.working_hours.weekly_hours,
-                onboardingStep=business.onboarding_step,
-            )
-
-        service_categories = []
-        for cat in (business.service_categories or []):
-            services = [
-                ServiceResponse(
-                    serviceId=s.id,
-                    businessId=s.business_id,
-                    categoryId=s.category_id,
-                    name=s.name,
-                    durationMinutes=s.duration_minutes,
-                    price=MoneyResponse(amount=s.price_amount, currency=s.price_currency),
-                    createdAt=s.created_at,
-                )
-                for s in cat.services
-            ]
-            service_categories.append(
-                ServiceCategoryResponse(
-                    categoryId=cat.id,
-                    businessId=cat.business_id,
-                    name=cat.name,
-                    createdAt=cat.created_at,
-                ).model_dump()
-            )
-            service_categories[-1]["services"] = [s.model_dump() for s in services]
-
-        policies = None
-        if business.policies:
-            p = business.policies
-            policies = PoliciesResponse(
-                businessId=p.business_id,
-                deposit={
-                    "required": p.deposit_required,
-                    "type": p.deposit_type,
-                    "amount": {"amount": p.deposit_amount or 0, "currency": p.deposit_currency or "KES"},
-                    "appliesTo": p.deposit_applies_to,
-                },
-                cancellation={
-                    "freeCancellationHours": p.cancellation_free_hours,
-                    "lateFeePercent": p.cancellation_late_fee_percent,
-                },
-                noShow={"feePercent": p.no_show_fee_percent},
-                onboardingStep=business.onboarding_step,
-            )
-
-        payment_dest = None
-        if business.payment_destination:
-            pd = business.payment_destination
-            payment_dest = PaymentDestinationResponse(
-                businessId=pd.business_id,
-                type=pd.type,
-                tillNumber=pd.till_number,
-                paybillNumber=pd.paybill_number,
-                paybillAccountNumber=pd.paybill_account_number,
-                bankName=pd.bank_name,
-                bankShortcode=pd.bank_shortcode,
-                bankAccountNumber=pd.bank_account_number,
-                verificationStatus=pd.verification_status,
+                weeklyHours=weekly_hours_response(business.working_hours.weekly_hours),
                 onboardingStep=business.onboarding_step,
             )
 
@@ -323,38 +371,137 @@ class BusinessService:
             description=business.description,
             amenities=business.amenities,
             location=LocationResponse(**business.location) if business.location else None,
-            photos=photos,
+            photos=[photo_response(p) for p in sorted(business.photos, key=lambda p: p.created_at)],
             workingHours=working_hours,
-            serviceCategories=service_categories,
-            policies=policies,
-            paymentDestination=payment_dest,
+            serviceCategories=[
+                category_response(c) for c in sorted(business.service_categories, key=lambda c: c.created_at)
+            ],
+            policies=policies_response(business, business.policies) if business.policies else None,
+            paymentDestination=(
+                payment_destination_response(business, business.payment_destination)
+                if business.payment_destination
+                else None
+            ),
             teamMode=business.team_mode,
             status=business.status,
             onboardingStep=business.onboarding_step,
         )
 
     # ─── upload-business-photo ───────────────────────────────
+    # Preferred: presigned direct upload (create_photo_upload_url → client PUTs
+    # to R2 → complete_photo_upload). Multipart upload_photo also works and is
+    # the only option with the local storage backend.
 
-    async def upload_photo(self, business_id: str, user_id: str, url: str, is_cover: bool) -> PhotoResponse:
+    @staticmethod
+    def _photo_key(business_id: uuid_pkg.UUID, photo_id: uuid_pkg.UUID, content_type: str) -> str:
+        return f"businesses/{business_id}/photos/{photo_id}.{IMAGE_TYPES[content_type]}"
+
+    @staticmethod
+    def _too_large() -> HTTPException:
+        mb = settings.MAX_PHOTO_BYTES // (1024 * 1024)
+        return HTTPException(
+            status_code=413,
+            detail={"error": "file_too_large", "message": f"Photo exceeds the maximum upload size of {mb} MB"},
+        )
+
+    async def create_photo_upload_url(
+        self, business_id: str, user_id: str, data: PhotoUploadUrlRequest
+    ) -> PhotoUploadUrlResponse:
+        business = await self._get_owned_business(business_id, user_id)
+        if data.size_bytes > settings.MAX_PHOTO_BYTES:
+            raise self._too_large()
+
+        key = self._photo_key(business.id, uuid_pkg.uuid4(), data.content_type)
+        try:
+            url = await get_storage().presign_upload(
+                key, data.content_type, data.size_bytes, settings.UPLOAD_URL_EXPIRE_SECONDS
+            )
+        except DirectUploadUnsupported:
+            raise HTTPException(
+                status_code=501,
+                detail={
+                    "error": "direct_upload_unavailable",
+                    "message": "Direct uploads aren't available on this server; use multipart POST /photos",
+                },
+            )
+        return PhotoUploadUrlResponse(
+            uploadUrl=url,
+            headers={"Content-Type": data.content_type},
+            key=key,
+            expiresIn=settings.UPLOAD_URL_EXPIRE_SECONDS,
+        )
+
+    async def complete_photo_upload(
+        self, business_id: str, user_id: str, data: CompletePhotoUploadRequest
+    ) -> PhotoResponse:
         business = await self._get_owned_business(business_id, user_id)
 
-        photo = BusinessPhoto(
-            business_id=business.id,
-            url=url,
-            is_cover=is_cover,
-        )
+        match = re.fullmatch(rf"businesses/{business.id}/photos/([0-9a-f-]{{36}})\.(jpg|png)", data.key)
+        if not match:
+            raise _validation_error("key was not issued for this business")
+        photo_id = uuid_pkg.UUID(match.group(1))
+
+        existing = await self.db.get(BusinessPhoto, photo_id)
+        if existing:
+            # Retried completion: same answer as the first time.
+            return photo_response(existing)
+
+        storage = get_storage()
+        stored = await storage.stat(data.key)
+        if stored is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "upload_not_found", "message": "No uploaded file found for this key; upload it first"},
+            )
+        if stored.size > settings.MAX_PHOTO_BYTES:
+            await storage.delete(data.key)
+            raise self._too_large()
+        actual_type = sniff_image(await storage.read_head(data.key, 16))
+        if actual_type is None or IMAGE_TYPES[actual_type] != match.group(2):
+            await storage.delete(data.key)
+            raise _validation_error("photo must be a JPEG or PNG image")
+
+        return await self._add_photo(business, photo_id, data.key, storage.public_url(data.key), data.is_cover)
+
+    async def upload_photo(self, business_id: str, user_id: str, photo: UploadFile, is_cover: bool) -> PhotoResponse:
+        business = await self._get_owned_business(business_id, user_id)
+
+        data = await photo.read(settings.MAX_PHOTO_BYTES + 1)
+        if not data:
+            raise _validation_error("photo file is required")
+        if len(data) > settings.MAX_PHOTO_BYTES:
+            raise self._too_large()
+        content_type = sniff_image(data)
+        if content_type is None:
+            raise _validation_error("photo must be a JPEG or PNG image")
+
+        photo_id = uuid_pkg.uuid4()
+        key = self._photo_key(business.id, photo_id, content_type)
+        url = await get_storage().save(key, data, content_type)
+        try:
+            return await self._add_photo(business, photo_id, key, url, is_cover)
+        except Exception:
+            await delete_stored_object.enqueue(key=key)
+            raise
+
+    async def _add_photo(
+        self, business: Business, photo_id: uuid_pkg.UUID, key: str, url: str, is_cover: bool
+    ) -> PhotoResponse:
+        current = (
+            await self.db.execute(select(BusinessPhoto).where(BusinessPhoto.business_id == business.id))
+        ).scalars().all()
+        # Exactly one cover: the first photo always is, and a new cover replaces the old one.
+        is_cover = is_cover or not any(p.is_cover for p in current)
+        if is_cover:
+            for p in current:
+                p.is_cover = False
+
+        photo = BusinessPhoto(id=photo_id, business_id=business.id, url=url, storage_key=key, is_cover=is_cover)
         self.db.add(photo)
         business.onboarding_step = OnboardingStep.PHOTOS
         await self.db.commit()
         await self.db.refresh(photo)
-
-        return PhotoResponse(
-            photoId=photo.id,
-            businessId=photo.business_id,
-            url=photo.url,
-            isCover=photo.is_cover,
-            createdAt=photo.created_at,
-        )
+        return photo_response(photo)
 
     async def delete_photo(self, business_id: str, user_id: str, photo_id: str) -> None:
         business = await self._get_owned_business(business_id, user_id)
@@ -365,14 +512,14 @@ class BusinessService:
                 detail={"error": "not_found", "message": "photoId does not exist for this business"},
             )
 
-        was_cover = photo.is_cover
+        was_cover, key = photo.is_cover, photo.storage_key
         await self.db.delete(photo)
 
         if was_cover:
             remaining = (
                 await self.db.execute(
                     select(BusinessPhoto)
-                    .where(BusinessPhoto.business_id == business.id)
+                    .where(BusinessPhoto.business_id == business.id, BusinessPhoto.id != photo.id)
                     .order_by(BusinessPhoto.created_at)
                 )
             ).scalars().all()
@@ -380,37 +527,37 @@ class BusinessService:
                 remaining[0].is_cover = True
 
         await self.db.commit()
+        if key:
+            await delete_stored_object.enqueue(key=key)
 
     # ─── set-working-hours ───────────────────────────────────
 
-    async def set_working_hours(self, business_id: str, user_id: str, weekly_hours: dict) -> WorkingHoursResponse:
+    async def set_working_hours(self, business_id: str, user_id: str, weekly_hours: WeeklyHoursRequest) -> WorkingHoursResponse:
         business = await self._get_owned_business(business_id, user_id)
 
-        for day, hours in weekly_hours.items():
-            if hours is not None:
-                if hours.get("open") >= hours.get("close"):
-                    raise HTTPException(
-                        status_code=400,
-                        detail={"error": "validation_error", "message": "close time must be after open time"},
-                    )
+        for day in _WEEKDAYS:
+            hours = getattr(weekly_hours, day)
+            # HH:MM strings compare correctly once the format is validated.
+            if hours is not None and hours.open >= hours.close:
+                raise _validation_error(f"{day}: close time must be after open time")
 
+        stored = weekly_hours.model_dump()  # all seven days, closed ones as null
         existing = await self.db.execute(
             select(WorkingHours).where(WorkingHours.business_id == business.id)
         )
         wh = existing.scalar_one_or_none()
         if wh:
-            wh.weekly_hours = weekly_hours
+            wh.weekly_hours = stored
         else:
-            wh = WorkingHours(business_id=business.id, weekly_hours=weekly_hours)
+            wh = WorkingHours(business_id=business.id, weekly_hours=stored)
             self.db.add(wh)
 
         business.onboarding_step = OnboardingStep.WORKING_HOURS
         await self.db.commit()
-        await self.db.refresh(wh)
 
         return WorkingHoursResponse(
             businessId=business.id,
-            weeklyHours=weekly_hours,
+            weeklyHours=weekly_hours_response(stored),
             onboardingStep=business.onboarding_step,
         )
 
@@ -446,29 +593,7 @@ class BusinessService:
             .where(ServiceCategory.business_id == business.id)
             .order_by(ServiceCategory.created_at)
         )
-        categories = result.scalars().all()
-
-        output = []
-        for cat in categories:
-            services = [
-                {
-                    "serviceId": str(s.id),
-                    "businessId": str(s.business_id),
-                    "categoryId": str(s.category_id),
-                    "name": s.name,
-                    "durationMinutes": s.duration_minutes,
-                    "price": {"amount": s.price_amount, "currency": s.price_currency},
-                }
-                for s in cat.services
-            ]
-            output.append({
-                "categoryId": str(cat.id),
-                "businessId": str(cat.business_id),
-                "name": cat.name,
-                "services": services,
-            })
-
-        return ListServiceCategoriesResponse(categories=output)
+        return ListServiceCategoriesResponse(categories=[category_response(c) for c in result.scalars()])
 
     # ─── create-service ──────────────────────────────────────
 
@@ -505,15 +630,7 @@ class BusinessService:
         await self.db.commit()
         await self.db.refresh(service)
 
-        return ServiceResponse(
-            serviceId=service.id,
-            businessId=service.business_id,
-            categoryId=service.category_id,
-            name=service.name,
-            durationMinutes=service.duration_minutes,
-            price=MoneyResponse(amount=service.price_amount, currency=service.price_currency),
-            createdAt=service.created_at,
-        )
+        return service_response(service)
 
     # ─── update-service ──────────────────────────────────────
 
@@ -541,15 +658,7 @@ class BusinessService:
         await self.db.commit()
         await self.db.refresh(service)
 
-        return ServiceResponse(
-            serviceId=service.id,
-            businessId=service.business_id,
-            categoryId=service.category_id,
-            name=service.name,
-            durationMinutes=service.duration_minutes,
-            price=MoneyResponse(amount=service.price_amount, currency=service.price_currency),
-            createdAt=service.created_at,
-        )
+        return service_response(service)
 
     async def delete_service(self, business_id: str, user_id: str, service_id: str) -> None:
         business = await self._get_owned_business(business_id, user_id)
@@ -560,6 +669,7 @@ class BusinessService:
                 detail={"error": "not_found", "message": "serviceId does not exist for this business"},
             )
         await self.db.delete(service)
+        await self._forget_deposit_services(business.id, {service.id})
         await self.db.commit()
 
     async def delete_service_category(self, business_id: str, user_id: str, category_id: str) -> None:
@@ -570,116 +680,143 @@ class BusinessService:
                 status_code=404,
                 detail={"error": "not_found", "message": "categoryId does not exist for this business"},
             )
+        service_ids = set(
+            (await self.db.execute(select(Service.id).where(Service.category_id == category.id))).scalars()
+        )
         await self.db.delete(category)
+        await self._forget_deposit_services(business.id, service_ids)
         await self.db.commit()
+
+    async def _forget_deposit_services(self, business_id: uuid_pkg.UUID, service_ids: set) -> None:
+        """Drop deleted services from a selected_services deposit rule."""
+        policies = (
+            await self.db.execute(select(BusinessPolicies).where(BusinessPolicies.business_id == business_id))
+        ).scalar_one_or_none()
+        if policies and policies.deposit_service_ids:
+            gone = {str(i) for i in service_ids}
+            policies.deposit_service_ids = [i for i in policies.deposit_service_ids if i not in gone]
 
     # ─── set-policies ────────────────────────────────────────
 
     async def set_policies(self, business_id: str, user_id: str, data: SetPoliciesRequest) -> PoliciesResponse:
         business = await self._get_owned_business(business_id, user_id)
+        deposit = data.deposit
+
+        # Only the fields for the chosen type/scope are kept, so stale values can't linger.
+        amount = deposit.amount if deposit.type == "fixed" else None
+        percent = deposit.percent if deposit.type == "percent" else None
+        service_ids = None
+        if deposit.applies_to == "selected_services":
+            service_ids = list(dict.fromkeys(str(i) for i in (deposit.service_ids or [])))
+
+        if deposit.required:
+            if deposit.type == "fixed" and (amount is None or amount.amount <= 0):
+                raise _validation_error("deposit.amount.amount must be greater than 0 for a fixed deposit")
+            if deposit.type == "percent" and not percent:
+                raise _validation_error("deposit.percent must be between 1 and 100 for a percent deposit")
+            if deposit.applies_to == "selected_services" and not service_ids:
+                raise _validation_error("deposit.serviceIds is required when appliesTo is selected_services")
+
+        if service_ids:
+            owned = {
+                str(i)
+                for i in (
+                    await self.db.execute(
+                        select(Service.id).where(
+                            Service.business_id == business.id,
+                            Service.id.in_([uuid_pkg.UUID(i) for i in service_ids]),
+                        )
+                    )
+                ).scalars()
+            }
+            unknown = [i for i in service_ids if i not in owned]
+            if unknown:
+                raise _validation_error(f"deposit.serviceIds contains services not in this business: {', '.join(unknown)}")
 
         existing = await self.db.execute(
             select(BusinessPolicies).where(BusinessPolicies.business_id == business.id)
         )
         policies = existing.scalar_one_or_none()
-        if policies:
-            policies.deposit_required = data.deposit.required
-            policies.deposit_type = data.deposit.type
-            policies.deposit_amount = data.deposit.amount.amount
-            policies.deposit_currency = data.deposit.amount.currency
-            policies.deposit_applies_to = data.deposit.applies_to
-            policies.cancellation_free_hours = data.cancellation.free_cancellation_hours
-            policies.cancellation_late_fee_percent = data.cancellation.late_fee_percent
-            policies.no_show_fee_percent = data.no_show.fee_percent
-        else:
-            policies = BusinessPolicies(
-                business_id=business.id,
-                deposit_required=data.deposit.required,
-                deposit_type=data.deposit.type,
-                deposit_amount=data.deposit.amount.amount,
-                deposit_currency=data.deposit.amount.currency,
-                deposit_applies_to=data.deposit.applies_to,
-                cancellation_free_hours=data.cancellation.free_cancellation_hours,
-                cancellation_late_fee_percent=data.cancellation.late_fee_percent,
-                no_show_fee_percent=data.no_show.fee_percent,
-            )
+        if not policies:
+            policies = BusinessPolicies(business_id=business.id)
             self.db.add(policies)
+
+        policies.deposit_required = deposit.required
+        policies.deposit_type = deposit.type
+        policies.deposit_amount = amount.amount if amount else None
+        policies.deposit_currency = amount.currency if amount else None
+        policies.deposit_percent = percent
+        policies.deposit_applies_to = deposit.applies_to
+        policies.deposit_service_ids = service_ids
+        policies.cancellation_free_hours = data.cancellation.free_cancellation_hours
+        policies.cancellation_late_fee_percent = data.cancellation.late_fee_percent
+        policies.no_show_fee_percent = data.no_show.fee_percent
 
         business.onboarding_step = OnboardingStep.POLICIES
         await self.db.commit()
 
-        return PoliciesResponse(
-            businessId=business.id,
-            deposit={
-                "required": policies.deposit_required,
-                "type": policies.deposit_type,
-                "amount": {"amount": policies.deposit_amount, "currency": policies.deposit_currency},
-                "appliesTo": policies.deposit_applies_to,
-            },
-            cancellation={
-                "freeCancellationHours": policies.cancellation_free_hours,
-                "lateFeePercent": policies.cancellation_late_fee_percent,
-            },
-            noShow={"feePercent": policies.no_show_fee_percent},
-            onboardingStep=business.onboarding_step,
-        )
+        return policies_response(business, policies)
 
     # ─── set-payment-destination ─────────────────────────────
 
     async def set_payment_destination(self, business_id: str, user_id: str, data: SetPaymentDestinationRequest) -> PaymentDestinationResponse:
         business = await self._get_owned_business(business_id, user_id)
-
-        if data.type == PaymentDestinationType.MPESA_TILL and not data.till_number:
-            raise HTTPException(status_code=400, detail={"error": "validation_error", "message": "tillNumber is required for type mpesa_till"})
-        if data.type == PaymentDestinationType.MPESA_PAYBILL:
-            if not data.paybill_number or not data.paybill_account_number:
-                raise HTTPException(status_code=400, detail={"error": "validation_error", "message": "paybillNumber and paybillAccountNumber are required for type mpesa_paybill"})
-        if data.type == PaymentDestinationType.BANK_ACCOUNT:
-            if not data.bank_name or not data.bank_shortcode or not data.bank_account_number:
-                raise HTTPException(status_code=400, detail={"error": "validation_error", "message": "bankName, bankShortcode, and bankAccountNumber are required for type bank_account"})
+        fields = self._validate_payment_destination(data)
 
         existing = await self.db.execute(
             select(PaymentDestination).where(PaymentDestination.business_id == business.id)
         )
         pd = existing.scalar_one_or_none()
-        if pd:
-            pd.type = data.type
-            pd.till_number = data.till_number
-            pd.paybill_number = data.paybill_number
-            pd.paybill_account_number = data.paybill_account_number
-            pd.bank_name = data.bank_name
-            pd.bank_shortcode = data.bank_shortcode
-            pd.bank_account_number = data.bank_account_number
-            pd.verification_status = VerificationStatus.VERIFIED
-        else:
-            pd = PaymentDestination(
-                business_id=business.id,
-                type=data.type,
-                till_number=data.till_number,
-                paybill_number=data.paybill_number,
-                paybill_account_number=data.paybill_account_number,
-                bank_name=data.bank_name,
-                bank_shortcode=data.bank_shortcode,
-                bank_account_number=data.bank_account_number,
-                verification_status=VerificationStatus.VERIFIED,
-            )
+        if not pd:
+            pd = PaymentDestination(business_id=business.id)
             self.db.add(pd)
+
+        pd.type = data.type
+        # Clear fields from a previously saved type.
+        for name in ("till_number", "paybill_number", "paybill_account_number", "bank_name", "bank_shortcode", "bank_account_number"):
+            setattr(pd, name, fields.get(name))
+        # "verified" currently means the details passed format validation. A real
+        # check (e.g. an M-Pesa account-name lookup) would start at PENDING and
+        # be completed by a worker task.
+        pd.verification_status = VerificationStatus.VERIFIED
 
         business.onboarding_step = OnboardingStep.PAYMENT_DESTINATION
         await self.db.commit()
 
-        return PaymentDestinationResponse(
-            businessId=business.id,
-            type=pd.type,
-            tillNumber=pd.till_number,
-            paybillNumber=pd.paybill_number,
-            paybillAccountNumber=pd.paybill_account_number,
-            bankName=pd.bank_name,
-            bankShortcode=pd.bank_shortcode,
-            bankAccountNumber=pd.bank_account_number,
-            verificationStatus=pd.verification_status,
-            onboardingStep=business.onboarding_step,
-        )
+        return payment_destination_response(business, pd)
+
+    @staticmethod
+    def _validate_payment_destination(data: SetPaymentDestinationRequest) -> dict:
+        """Check the fields for data.type and return them normalised (spaces removed)."""
+        def digits(value: Optional[str]) -> str:
+            return re.sub(r"[\s-]", "", value or "")
+
+        if data.type == PaymentDestinationType.MPESA_TILL:
+            till = digits(data.till_number)
+            if not till:
+                raise _validation_error("tillNumber is required for type mpesa_till")
+            if not re.fullmatch(r"\d{5,7}", till):
+                raise _validation_error("tillNumber must be 5-7 digits")
+            return {"till_number": till}
+
+        if data.type == PaymentDestinationType.MPESA_PAYBILL:
+            paybill, account = digits(data.paybill_number), (data.paybill_account_number or "").strip()
+            if not paybill or not account:
+                raise _validation_error("paybillNumber and paybillAccountNumber are required for type mpesa_paybill")
+            if not re.fullmatch(r"\d{5,6}", paybill):
+                raise _validation_error("paybillNumber must be 5-6 digits")
+            if len(account) > 50:
+                raise _validation_error("paybillAccountNumber must be at most 50 characters")
+            return {"paybill_number": paybill, "paybill_account_number": account}
+
+        name, shortcode, account = (data.bank_name or "").strip(), digits(data.bank_shortcode), digits(data.bank_account_number)
+        if not name or not shortcode or not account:
+            raise _validation_error("bankName, bankShortcode, and bankAccountNumber are required for type bank_account")
+        if not re.fullmatch(r"\d{5,6}", shortcode):
+            raise _validation_error("bankShortcode must be 5-6 digits")
+        if not re.fullmatch(r"[A-Za-z0-9]{5,34}", account):
+            raise _validation_error("bankAccountNumber must be 5-34 letters or digits")
+        return {"bank_name": name, "bank_shortcode": shortcode, "bank_account_number": account}
 
     # ─── set-team-mode ───────────────────────────────────────
 
@@ -697,41 +834,39 @@ class BusinessService:
 
     # ─── invite-team-member ──────────────────────────────────
 
-    async def invite_team_member(self, business_id: str, user_id: str, data: InviteTeamMemberRequest) -> TeamInvitationResponse:
+    async def invite_team_member(self, business_id: str, user_id: str, data: InviteTeamMemberRequest) -> TeamMemberResponse:
         business = await self._get_owned_business(business_id, user_id)
+        invitation = await self._create_invitation(business, user_id, data)
+        return team_member_response(invitation)
 
+    async def _create_invitation(
+        self, business: Business, user_id: str, data: InviteTeamMemberRequest, **member_fields
+    ) -> TeamInvitation:
         if not data.email and not data.phone:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "validation_error", "message": "email or phone is required"},
-            )
+            raise _validation_error("email or phone is required")
 
-        if data.email:
-            existing = await self.db.execute(
-                select(TeamInvitation).where(
-                    TeamInvitation.business_id == business.id,
-                    TeamInvitation.email == data.email,
-                    TeamInvitation.status == InvitationStatus.PENDING,
+        for field, value in (("email", data.email), ("phone", data.phone)):
+            if not value:
+                continue
+            column = getattr(TeamInvitation, field)
+            clash = (
+                await self.db.execute(
+                    select(TeamInvitation.status).where(
+                        TeamInvitation.business_id == business.id,
+                        column == value,
+                        TeamInvitation.status.in_([InvitationStatus.PENDING, InvitationStatus.ACCEPTED]),
+                    )
                 )
-            )
-            if existing.scalar_one_or_none():
+            ).scalars().first()
+            if clash == InvitationStatus.PENDING:
                 raise HTTPException(
                     status_code=409,
-                    detail={"error": "already_invited", "message": "This email already has a pending invitation"},
+                    detail={"error": "already_invited", "message": f"This {field} already has a pending invitation"},
                 )
-
-        if data.phone:
-            existing = await self.db.execute(
-                select(TeamInvitation).where(
-                    TeamInvitation.business_id == business.id,
-                    TeamInvitation.phone == data.phone,
-                    TeamInvitation.status == InvitationStatus.PENDING,
-                )
-            )
-            if existing.scalar_one_or_none():
+            if clash == InvitationStatus.ACCEPTED:
                 raise HTTPException(
                     status_code=409,
-                    detail={"error": "already_invited", "message": "This phone already has a pending invitation"},
+                    detail={"error": "already_member", "message": f"This {field} already belongs to a team member"},
                 )
 
         invitation = TeamInvitation(
@@ -741,20 +876,88 @@ class BusinessService:
             role=data.role,
             status=InvitationStatus.PENDING,
             invited_by=user_id,
+            **member_fields,
         )
         self.db.add(invitation)
         await self.db.commit()
         await self.db.refresh(invitation)
+        return invitation
 
-        return TeamInvitationResponse(
-            invitationId=invitation.id,
-            businessId=invitation.business_id,
-            email=invitation.email,
-            phone=invitation.phone,
-            role=invitation.role,
-            status=invitation.status,
-            sentAt=invitation.sent_at,
+    # ─── team members (post-publish roster) ──────────────────
+    # The invitation is the roster record: pending until accepted, then the
+    # member also gets a Staff row (see respond_to_invitation).
+
+    async def list_team_members(self, business_id: str, user_id: str) -> ListTeamMembersResponse:
+        business = await self._get_owned_business(business_id, user_id)
+        result = await self.db.execute(
+            select(TeamInvitation)
+            .where(
+                TeamInvitation.business_id == business.id,
+                TeamInvitation.status.in_([InvitationStatus.PENDING, InvitationStatus.ACCEPTED]),
+            )
+            .order_by(TeamInvitation.sent_at)
         )
+        return ListTeamMembersResponse(members=[team_member_response(i) for i in result.scalars()])
+
+    async def add_team_member(self, business_id: str, user_id: str, data: AddTeamMemberRequest) -> TeamMemberResponse:
+        business = await self._get_owned_business(business_id, user_id)
+        invitation = await self._create_invitation(
+            business,
+            user_id,
+            data,
+            name=data.name,
+            commission_percent=data.commission_percent,
+            working_days=self._normalise_days(data.working_days),
+        )
+        return team_member_response(invitation)
+
+    async def update_team_member(
+        self, business_id: str, user_id: str, invitation_id: str, data: UpdateTeamMemberRequest
+    ) -> TeamMemberResponse:
+        business = await self._get_owned_business(business_id, user_id)
+        invitation = await self._get_member(business, invitation_id)
+
+        fields = data.model_fields_set
+        if "commission_percent" in fields:
+            if data.commission_percent is None:
+                raise _validation_error("commissionPercent must be between 0 and 100")
+            invitation.commission_percent = data.commission_percent
+        if "working_days" in fields:
+            invitation.working_days = self._normalise_days(data.working_days)
+
+        await self.db.commit()
+        await self.db.refresh(invitation)
+        return team_member_response(invitation)
+
+    async def remove_team_member(self, business_id: str, user_id: str, invitation_id: str) -> None:
+        """Cancels a pending invitation, or removes an accepted member from the team."""
+        business = await self._get_owned_business(business_id, user_id)
+        invitation = await self._get_member(business, invitation_id)
+
+        if invitation.status == InvitationStatus.ACCEPTED and invitation.user_id:
+            await self.db.execute(
+                delete(Staff).where(Staff.business_id == business.id, Staff.user_id == invitation.user_id)
+            )
+        await self.db.delete(invitation)
+        await self.db.commit()
+
+    async def _get_member(self, business: Business, invitation_id: str) -> TeamInvitation:
+        invitation = await self.db.get(TeamInvitation, self._parse_path_id(invitation_id, "invitationId"))
+        if (
+            not invitation
+            or invitation.business_id != business.id
+            or invitation.status not in (InvitationStatus.PENDING, InvitationStatus.ACCEPTED)
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "message": "invitationId does not exist for this business"},
+            )
+        return invitation
+
+    @staticmethod
+    def _normalise_days(days: Optional[list]) -> Optional[list]:
+        # Dedupe and store in week order.
+        return None if days is None else [d for d in _WEEKDAYS if d in set(days)]
 
     # ─── publish-business ────────────────────────────────────
 
@@ -783,7 +986,10 @@ class BusinessService:
                     status_code=422,
                     detail={"error": "incomplete_setup", "message": "policies must be set before publishing"},
                 )
-            if not business.payment_destination:
+            if (
+                not business.payment_destination
+                or business.payment_destination.verification_status != VerificationStatus.VERIFIED
+            ):
                 raise HTTPException(
                     status_code=422,
                     detail={"error": "incomplete_setup", "message": "paymentDestination must be verified before publishing"},
@@ -825,6 +1031,37 @@ class BusinessService:
             visible=data.visible,
             publishedAt=business.published_at,
         )
+
+    # ─── My Businesses ────────────────────────────────────────
+
+    async def list_my_businesses(self, user_id: uuid_pkg.UUID):
+        from app.modules.business.schemas import ListMyBusinessesResponse, MyBusinessResponse
+        owned = await self.db.execute(
+            select(Business)
+            .where(Business.owner_id == user_id)
+            .order_by(Business.created_at.asc())
+        )
+        items = [
+            MyBusinessResponse(businessId=b.id, name=b.name, status=b.status, role="owner")
+            for b in owned.scalars()
+        ]
+        owned_ids = {item.business_id for item in items}
+
+        memberships = await self.db.execute(
+            select(Staff, Business)
+            .join(Business, Business.id == Staff.business_id)
+            .where(Staff.user_id == user_id)
+            .order_by(Staff.created_at.asc())
+        )
+        for staff, business in memberships.all():
+            # Owners also get a Staff row (role "owner") on their own business when it's published.
+            if business.id in owned_ids:
+                continue
+            owned_ids.add(business.id)
+            items.append(MyBusinessResponse(
+                businessId=business.id, name=business.name, status=business.status, role=staff.role,
+            ))
+        return ListMyBusinessesResponse(businesses=items)
 
     # ─── Team Invitations (received) ──────────────────────────
 
@@ -1031,19 +1268,12 @@ class BusinessService:
             key=lambda p: (not p.is_cover, p.created_at),
         )]
 
-        raw_hours = business.working_hours.weekly_hours if business.working_hours else {}
-        working_hours = {day: raw_hours.get(day) for day in _WEEKDAYS}
+        working_hours = weekly_hours_response(
+            business.working_hours.weekly_hours if business.working_hours else None
+        )
 
         profile_policies = ProfilePoliciesResponse(
-            deposit=DepositRuleResponse(
-                required=policies.deposit_required if policies else False,
-                type=policies.deposit_type if policies else None,
-                amount=MoneyResponse(
-                    amount=(policies.deposit_amount or 0) if policies else 0,
-                    currency=(policies.deposit_currency or "KES") if policies else "KES",
-                ),
-                appliesTo=policies.deposit_applies_to if policies else None,
-            ),
+            deposit=deposit_response(policies),
             cancellation=CancellationPolicyResponse(
                 freeCancellationHours=policies.cancellation_free_hours if policies else 24,
                 lateFeePercent=policies.cancellation_late_fee_percent if policies else 50,

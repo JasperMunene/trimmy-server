@@ -22,6 +22,7 @@ async def _create_otp(db_session, user_id, purpose="password_reset"):
 async def test_reset_password_success(client, test_user, db_session):
     otp = await _create_otp(db_session, test_user.id)
     response = await client.post("/api/v1/auth/reset-password", json={
+        "email": test_user.email,
         "otp": otp,
         "new_password": "newpassword123",
     })
@@ -33,6 +34,7 @@ async def test_reset_password_success(client, test_user, db_session):
 @pytest.mark.asyncio
 async def test_reset_password_invalid_otp(client, test_user):
     response = await client.post("/api/v1/auth/reset-password", json={
+        "email": test_user.email,
         "otp": "000000",
         "new_password": "newpassword123",
     })
@@ -53,6 +55,7 @@ async def test_reset_password_expired_otp(client, test_user, db_session):
     await db_session.commit()
 
     response = await client.post("/api/v1/auth/reset-password", json={
+        "email": test_user.email,
         "otp": otp,
         "new_password": "newpassword123",
     })
@@ -65,6 +68,7 @@ async def test_reset_password_expired_otp(client, test_user, db_session):
 async def test_reset_password_short_password(client, test_user, db_session):
     otp = await _create_otp(db_session, test_user.id)
     response = await client.post("/api/v1/auth/reset-password", json={
+        "email": test_user.email,
         "otp": otp,
         "new_password": "short",
     })

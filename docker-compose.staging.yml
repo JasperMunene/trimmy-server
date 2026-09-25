@@ -1,3 +1,23 @@
+x-app-env: &app-env
+  DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://trimmy_app:trimmy@2026@host.docker.internal:5433/trimmy_staging}
+  SECRET_KEY: ${SECRET_KEY}
+  REDIS_URL: redis://redis:6379/0
+  RABBITMQ_URL: amqp://timmy:${RABBITMQ_PASSWORD:-timmy_staging_password}@rabbitmq:5672/
+  RESEND_API_KEY: ${RESEND_API_KEY:-}
+  RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-noreply@trimmy.com}
+  CLIENT_URL: ${CLIENT_URL:-https://api.sandbox.trimmy.com}
+  CORS_ORIGINS: ${CORS_ORIGINS}
+  GOOGLE_AUTH_CLIENT_ID: ${GOOGLE_AUTH_CLIENT_ID:-}
+  GOOGLE_AUTH_CLIENT_SECRET: ${GOOGLE_AUTH_CLIENT_SECRET:-}
+  GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-}
+  GOOGLE_WEB_REDIRECT_URL: ${GOOGLE_WEB_REDIRECT_URL:-}
+  GOOGLE_MOBILE_REDIRECT_URL: ${GOOGLE_MOBILE_REDIRECT_URL:-trimmy://auth/google}
+  R2_ENDPOINT: ${R2_ENDPOINT:-}
+  R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+  R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+  R2_BUCKET: ${R2_BUCKET:-}
+  R2_PUBLIC_URL: ${R2_PUBLIC_URL:-}
+
 services:
   redis:
     image: redis:7-alpine
@@ -34,15 +54,7 @@ services:
     restart: unless-stopped
     ports:
       - "8001:8000"
-    environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://trimmy_app:trimmy@2026@host.docker.internal:5433/trimmy_staging}
-      SECRET_KEY: ${SECRET_KEY}
-      REDIS_URL: redis://redis:6379/0
-      RABBITMQ_URL: amqp://timmy:${RABBITMQ_PASSWORD:-timmy_staging_password}@rabbitmq:5672/
-      RESEND_API_KEY: ${RESEND_API_KEY:-}
-      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-noreply@trimmy.com}
-      CLIENT_URL: ${CLIENT_URL:-https://api.sandbox.trimmy.com}
-      CORS_ORIGINS: ${CORS_ORIGINS}
+    environment: *app-env
     depends_on:
       redis:
         condition: service_healthy
@@ -50,6 +62,23 @@ services:
         condition: service_healthy
     command: >
       sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"
+    networks:
+      - default
+      - pg-net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  worker:
+    build: .
+    restart: unless-stopped
+    environment: *app-env
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    command: python worker.py
+    # Give in-flight tasks time to finish on redeploy (worker waits up to 30s).
+    stop_grace_period: 40s
+    # Tasks call module services, so the worker needs the same DB access as the API.
     networks:
       - default
       - pg-net

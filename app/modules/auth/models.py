@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from enum import Enum as PyEnum
 from typing import Optional
-from sqlalchemy import String, Boolean, DateTime, ForeignKey, Text, Index
+from sqlalchemy import String, Boolean, DateTime, ForeignKey, Integer, Text, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 import uuid as uuid_pkg
 from app.core.base import Base
@@ -11,6 +11,7 @@ from app.core.db_types import UUID, uuid4
 class AuthType(str, PyEnum):
     EMAIL = "email"
     PHONE = "phone"
+    GOOGLE = "google"
 
 
 class User(Base):
@@ -22,6 +23,8 @@ class User(Base):
     first_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     last_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     phone: Mapped[Optional[str]] = mapped_column(Text, unique=True, nullable=True, index=True)
+    # Google's stable account id ("sub"); set once the user has signed in with Google.
+    google_sub: Mapped[Optional[str]] = mapped_column(Text, unique=True, nullable=True, index=True)
     verified: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     auth_type: Mapped[AuthType] = mapped_column(String(20), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -51,6 +54,7 @@ class AuthToken(Base):
     )
     token_hash: Mapped[str] = mapped_column(Text, nullable=False, index=True)
     purpose: Mapped[str] = mapped_column(String(50), nullable=False, default="verification")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -77,3 +81,21 @@ class RefreshToken(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     user: Mapped["User"] = relationship(back_populates="refresh_tokens")
+
+
+class OtpSendLog(Base):
+    """One row per OTP email sent (or requested), keyed by the raw email so
+    rate limits behave the same whether or not an account exists."""
+
+    __tablename__ = "otp_send_log"
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(UUID, primary_key=True, default=uuid4)
+    email: Mapped[str] = mapped_column(Text, nullable=False)
+    purpose: Mapped[str] = mapped_column(String(50), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    __table_args__ = (
+        Index("idx_otp_send_log_email_purpose_created", "email", "purpose", "created_at"),
+    )

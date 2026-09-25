@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Literal, Optional, List
 from datetime import datetime
 import uuid as uuid_pkg
 
@@ -80,7 +80,7 @@ class GetBusinessResponse(BaseModel):
     location: Optional[LocationResponse] = None
     photos: Optional[List["PhotoResponse"]] = []
     working_hours: Optional["WorkingHoursResponse"] = Field(None, alias="workingHours")
-    service_categories: Optional[List["ServiceCategoryResponse"]] = Field([], alias="serviceCategories")
+    service_categories: List["ServiceCategoryWithServicesResponse"] = Field([], alias="serviceCategories")
     policies: Optional["PoliciesResponse"] = None
     payment_destination: Optional["PaymentDestinationResponse"] = Field(None, alias="paymentDestination")
     team_mode: Optional[str] = Field(None, alias="teamMode")
@@ -104,20 +104,58 @@ class PhotoResponse(BaseModel):
 
 # ─── Working Hours ───────────────────────────────────────────
 
+Weekday = Literal["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+_HHMM = r"^([01]\d|2[0-3]):[0-5]\d$"
+# Close may also be 24:00 (open until midnight). Overnight hours aren't supported.
+_HHMM_CLOSE = r"^(([01]\d|2[0-3]):[0-5]\d|24:00)$"
+
+
+class DayHoursRequest(BaseModel):
+    open: str = Field(..., pattern=_HHMM, examples=["09:00"])
+    close: str = Field(..., pattern=_HHMM_CLOSE, examples=["19:00"])
+
+    model_config = {"extra": "forbid"}
+
+
+class WeeklyHoursRequest(BaseModel):
+    """Omitted or null days are closed."""
+
+    monday: Optional[DayHoursRequest] = None
+    tuesday: Optional[DayHoursRequest] = None
+    wednesday: Optional[DayHoursRequest] = None
+    thursday: Optional[DayHoursRequest] = None
+    friday: Optional[DayHoursRequest] = None
+    saturday: Optional[DayHoursRequest] = None
+    sunday: Optional[DayHoursRequest] = None
+
+    model_config = {"extra": "forbid"}
+
+
 class DayHoursResponse(BaseModel):
     open: str
     close: str
 
 
+class WeeklyHoursResponse(BaseModel):
+    monday: Optional[DayHoursResponse] = None
+    tuesday: Optional[DayHoursResponse] = None
+    wednesday: Optional[DayHoursResponse] = None
+    thursday: Optional[DayHoursResponse] = None
+    friday: Optional[DayHoursResponse] = None
+    saturday: Optional[DayHoursResponse] = None
+    sunday: Optional[DayHoursResponse] = None
+
+
 class WorkingHoursRequest(BaseModel):
-    weekly_hours: dict = Field(alias="weeklyHours")
+    weekly_hours: WeeklyHoursRequest = Field(alias="weeklyHours")
 
     model_config = {"populate_by_name": True}
 
 
 class WorkingHoursResponse(BaseModel):
     business_id: uuid_pkg.UUID = Field(alias="businessId")
-    weekly_hours: dict = Field(alias="weeklyHours")
+    weekly_hours: WeeklyHoursResponse = Field(alias="weeklyHours")
     onboarding_step: Optional[str] = Field(None, alias="onboardingStep")
 
     model_config = {"from_attributes": True, "populate_by_name": True}
@@ -167,8 +205,12 @@ class ServiceResponse(BaseModel):
     model_config = {"from_attributes": True, "populate_by_name": True}
 
 
+class ServiceCategoryWithServicesResponse(ServiceCategoryResponse):
+    services: List[ServiceResponse] = []
+
+
 class ListServiceCategoriesResponse(BaseModel):
-    categories: List[dict]
+    categories: List[ServiceCategoryWithServicesResponse]
 
 
 # ─── Policies ────────────────────────────────────────────────
@@ -176,8 +218,13 @@ class ListServiceCategoriesResponse(BaseModel):
 class DepositRuleRequest(BaseModel):
     required: bool
     type: str = Field(..., pattern=r"^(fixed|percent)$")
-    amount: MoneyResponse
+    # type "fixed": the deposit as money. Required (amount > 0) when required = true.
+    amount: Optional[MoneyResponse] = None
+    # type "percent": percentage of the service price, 1-100. Required when required = true.
+    percent: Optional[int] = Field(None, ge=0, le=100)
     applies_to: str = Field(alias="appliesTo", pattern=r"^(all_services|selected_services)$")
+    # Required (non-empty) when appliesTo = selected_services; must be this business's services.
+    service_ids: Optional[List[uuid_pkg.UUID]] = Field(None, alias="serviceIds")
 
     model_config = {"populate_by_name": True}
 
@@ -205,9 +252,9 @@ class SetPoliciesRequest(BaseModel):
 
 class PoliciesResponse(BaseModel):
     business_id: uuid_pkg.UUID = Field(alias="businessId")
-    deposit: dict
-    cancellation: dict
-    no_show: dict = Field(alias="noShow")
+    deposit: "DepositRuleResponse"
+    cancellation: "CancellationPolicyResponse"
+    no_show: "NoShowPolicyResponse" = Field(alias="noShow")
     onboarding_step: Optional[str] = Field(None, alias="onboardingStep")
 
     model_config = {"from_attributes": True, "populate_by_name": True}
@@ -266,16 +313,43 @@ class InviteTeamMemberRequest(BaseModel):
     role: str = Field(..., pattern=r"^(front_desk|staff)$")
 
 
-class TeamInvitationResponse(BaseModel):
+class AddTeamMemberRequest(InviteTeamMemberRequest):
+    name: str = Field(..., min_length=1, max_length=100)
+    commission_percent: int = Field(40, alias="commissionPercent", ge=0, le=100)
+    # null = works whenever the business is open.
+    working_days: Optional[List[Weekday]] = Field(None, alias="workingDays")
+
+    model_config = {"populate_by_name": True}
+
+
+class UpdateTeamMemberRequest(BaseModel):
+    """Only the fields sent are changed; send workingDays: null to clear it."""
+
+    commission_percent: Optional[int] = Field(None, alias="commissionPercent", ge=0, le=100)
+    working_days: Optional[List[Weekday]] = Field(None, alias="workingDays")
+
+    model_config = {"populate_by_name": True}
+
+
+class TeamMemberResponse(BaseModel):
+    """An invitation is the roster record, pending or accepted."""
+
     invitation_id: uuid_pkg.UUID = Field(alias="invitationId")
     business_id: uuid_pkg.UUID = Field(alias="businessId")
+    name: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
     role: str
     status: str
+    commission_percent: int = Field(alias="commissionPercent")
+    working_days: Optional[List[str]] = Field(None, alias="workingDays")
     sent_at: datetime = Field(alias="sentAt")
 
     model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+class ListTeamMembersResponse(BaseModel):
+    members: List[TeamMemberResponse]
 
 
 # ─── My Invitations (received) ───────────────────────────────
@@ -293,6 +367,21 @@ class MyInvitationResponse(BaseModel):
 
 class ListMyInvitationsResponse(BaseModel):
     invitations: List[MyInvitationResponse]
+
+
+# ─── My Businesses ───────────────────────────────────────────
+
+class MyBusinessResponse(BaseModel):
+    business_id: uuid_pkg.UUID = Field(alias="businessId")
+    name: str
+    status: str
+    role: str
+
+    model_config = {"populate_by_name": True}
+
+
+class ListMyBusinessesResponse(BaseModel):
+    businesses: List[MyBusinessResponse]
 
 
 # ─── Respond to Invitation ───────────────────────────────────
@@ -384,8 +473,12 @@ class ReviewResponse(BaseModel):
 class DepositRuleResponse(BaseModel):
     required: bool
     type: Optional[str] = None
-    amount: MoneyResponse
+    # Set for type "fixed", null for "percent".
+    amount: Optional[MoneyResponse] = None
+    # Set for type "percent", null for "fixed".
+    percent: Optional[int] = None
     applies_to: Optional[str] = Field(None, alias="appliesTo")
+    service_ids: List[uuid_pkg.UUID] = Field([], alias="serviceIds")
 
     model_config = {"populate_by_name": True}
 
@@ -424,7 +517,7 @@ class BusinessProfileResponse(BaseModel):
     lng: float
     deposit_summary: str = Field(alias="depositSummary")
     cancellation_summary: str = Field(alias="cancellationSummary")
-    working_hours: dict = Field(alias="workingHours")
+    working_hours: WeeklyHoursResponse = Field(alias="workingHours")
     policies: ProfilePoliciesResponse
     amenities: List[str]
     services: List[ProfileServiceResponse]
@@ -432,3 +525,61 @@ class BusinessProfileResponse(BaseModel):
     reviews: List[ReviewResponse]
 
     model_config = {"populate_by_name": True}
+
+
+GetBusinessResponse.model_rebuild()
+PoliciesResponse.model_rebuild()
+
+
+# ─── Photo uploads (direct to storage) ───────────────────────
+
+class PhotoUploadUrlRequest(BaseModel):
+    content_type: Literal["image/jpeg", "image/png"] = Field(alias="contentType")
+    size_bytes: int = Field(alias="sizeBytes", gt=0)
+
+    model_config = {"populate_by_name": True}
+
+
+class PhotoUploadUrlResponse(BaseModel):
+    upload_url: str = Field(alias="uploadUrl")
+    method: str = "PUT"
+    # Send exactly these headers with the PUT (they're part of the signature).
+    headers: dict[str, str]
+    key: str
+    expires_in: int = Field(alias="expiresIn")
+
+    model_config = {"populate_by_name": True}
+
+
+class CompletePhotoUploadRequest(BaseModel):
+    key: str = Field(..., min_length=1, max_length=300)
+    is_cover: bool = Field(False, alias="isCover")
+
+    model_config = {"populate_by_name": True}
+
+
+# ─── Payment destination options ─────────────────────────────
+
+class PaymentFieldOption(BaseModel):
+    name: str
+    label: str
+    keyboard: Literal["number", "default", "picker"]
+    pattern: str
+    hint: str
+
+
+class PaymentTypeOption(BaseModel):
+    type: Literal["mpesa_till", "mpesa_paybill", "bank_account"]
+    label: str
+    description: str
+    fields: List[PaymentFieldOption]
+
+
+class BankOption(BaseModel):
+    name: str
+    shortcode: str
+
+
+class PaymentDestinationOptionsResponse(BaseModel):
+    types: List[PaymentTypeOption]
+    banks: List[BankOption]

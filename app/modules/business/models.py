@@ -106,6 +106,8 @@ class BusinessPhoto(Base):
         UUID, ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True
     )
     url: Mapped[str] = mapped_column(Text, nullable=False)
+    # Key in object storage (see app/core/storage.py); null for rows from before real storage.
+    storage_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_cover: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -177,9 +179,14 @@ class BusinessPolicies(Base):
     )
     deposit_required: Mapped[bool] = mapped_column(Boolean, default=False)
     deposit_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # Money deposit (type "fixed").
     deposit_amount: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     deposit_currency: Mapped[Optional[str]] = mapped_column(String(3), nullable=True)
+    # Percentage deposit (type "percent"), 0-100.
+    deposit_percent: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     deposit_applies_to: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    # Service ids (as strings) the deposit applies to when applies_to = "selected_services".
+    deposit_service_ids: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     cancellation_free_hours: Mapped[int] = mapped_column(Integer, default=24)
     cancellation_late_fee_percent: Mapped[int] = mapped_column(Integer, default=50)
     no_show_fee_percent: Mapped[int] = mapped_column(Integer, default=100)
@@ -223,6 +230,11 @@ class TeamInvitation(Base):
     phone: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     role: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(20), default=InvitationStatus.PENDING)
+    # The invitation doubles as the team roster record, so member details live here.
+    name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    commission_percent: Mapped[int] = mapped_column(Integer, nullable=False, default=40)
+    # Lowercase weekday names, or null for "same as business hours".
+    working_days: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     invited_by: Mapped[uuid_pkg.UUID] = mapped_column(UUID, nullable=False)
     user_id: Mapped[Optional[uuid_pkg.UUID]] = mapped_column(UUID, nullable=True)
     sent_at: Mapped[datetime] = mapped_column(

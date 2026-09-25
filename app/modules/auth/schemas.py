@@ -49,11 +49,74 @@ class ForgotPasswordRequest(BaseModel):
     email: EmailStr
 
 
+class VerifyEmailRequest(BaseModel):
+    email: EmailStr
+    otp: str = Field(..., min_length=6, max_length=6)
+
+
 class ResetPasswordRequest(BaseModel):
+    email: EmailStr
     otp: str = Field(..., min_length=6, max_length=6)
     new_password: str = Field(..., min_length=8, max_length=128)
+
+
+class VerifyResetOtpRequest(BaseModel):
+    email: EmailStr
+    otp: str = Field(..., min_length=6, max_length=6)
+
+
+class VerifyResetOtpResponse(BaseModel):
+    valid: bool
 
 
 class ResendOtpRequest(BaseModel):
     email: EmailStr
     purpose: str = Field(..., pattern=r"^(verification|password_reset)$")
+
+
+class MessageResponse(BaseModel):
+    message: str
+
+
+class LogoutRequest(BaseModel):
+    refresh_token: str
+
+
+class DeleteAccountRequest(BaseModel):
+    password: str
+
+
+class UpdateMeRequest(BaseModel):
+    first_name: Optional[str] = Field(None, min_length=1, max_length=100)
+    last_name: Optional[str] = Field(None, min_length=1, max_length=100)
+    # Send null to remove the phone number; omit to leave it unchanged.
+    phone: Optional[str] = Field(None, min_length=1, max_length=32)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+
+class ChangePasswordResponse(BaseModel):
+    message: str
+    # All existing sessions are revoked; the caller should replace its stored tokens.
+    tokens: TokenResponse
+
+
+class CheckEmailRequest(BaseModel):
+    email: EmailStr
+
+
+class CheckEmailResponse(BaseModel):
+    exists: bool
+
+
+class GoogleAuthUrlResponse(BaseModel):
+    url: str
+
+
+class GoogleExchangeRequest(BaseModel):
+    code: str = Field(..., min_length=1, max_length=256)
+    # Required if a code_challenge was sent to GET /auth/google/url.
+    code_verifier: Optional[str] = Field(None, min_length=43, max_length=128)

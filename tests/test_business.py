@@ -109,7 +109,7 @@ async def test_upload_photo(client: AsyncClient, auth_headers: dict):
 
     resp = await client.post(
         f"/api/v1/businesses/{biz_id}/photos",
-        files={"photo": ("test.jpg", b"fake_image_data", "image/jpeg")},
+        files={"photo": ("test.jpg", b"\xff\xd8\xff\xe0fake_jpeg", "image/jpeg")},
         data={"isCover": "true"},
         headers=auth_headers,
     )
@@ -934,14 +934,14 @@ async def test_delete_business_photo_promotes_next_cover(
 
     cover = await client.post(
         f"/api/v1/businesses/{biz_id}/photos",
-        files={"photo": ("cover.jpg", b"cover_bytes", "image/jpeg")},
+        files={"photo": ("cover.jpg", b"\xff\xd8\xff\xe0cover", "image/jpeg")},
         data={"isCover": "true"},
         headers=auth_headers,
     )
     assert cover.status_code == 201
     gallery = await client.post(
         f"/api/v1/businesses/{biz_id}/photos",
-        files={"photo": ("g.jpg", b"gallery_bytes", "image/jpeg")},
+        files={"photo": ("g.jpg", b"\xff\xd8\xff\xe0gallery", "image/jpeg")},
         data={"isCover": "false"},
         headers=auth_headers,
     )

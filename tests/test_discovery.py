@@ -360,7 +360,7 @@ async def test_search_includes_starting_price_and_thumbnail(
 
     photo = await client.post(
         f"/api/v1/businesses/{biz_id}/photos",
-        files={"photo": ("cover.jpg", b"fake_image_data", "image/jpeg")},
+        files={"photo": ("cover.jpg", b"\xff\xd8\xff\xe0fake_jpeg", "image/jpeg")},
         data={"isCover": "true"},
         headers=auth_headers,
     )
