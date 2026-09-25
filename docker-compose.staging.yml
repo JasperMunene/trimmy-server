@@ -3,8 +3,10 @@ x-app-env: &app-env
   SECRET_KEY: ${SECRET_KEY}
   REDIS_URL: redis://redis:6379/0
   RABBITMQ_URL: amqp://timmy:${RABBITMQ_PASSWORD:-timmy_staging_password}@rabbitmq:5672/
-  RESEND_API_KEY: ${RESEND_API_KEY:-}
-  RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-noreply@trimmy.com}
+  # RESEND_API_KEY / RESEND_FROM_EMAIL intentionally NOT set here — they come
+  # from .env via `env_file` on the app/worker services below. Declaring them
+  # here with ${VAR:-} would override the .env value with an empty string
+  # whenever the host shell var is unset, which silently disabled email sends.
   CLIENT_URL: ${CLIENT_URL:-https://api.sandbox.trimmy.com}
   CORS_ORIGINS: ${CORS_ORIGINS}
   GOOGLE_AUTH_CLIENT_ID: ${GOOGLE_AUTH_CLIENT_ID:-}
@@ -54,6 +56,8 @@ services:
     restart: unless-stopped
     ports:
       - "8001:8000"
+    env_file:
+      - .env
     environment: *app-env
     depends_on:
       redis:
@@ -71,6 +75,8 @@ services:
   worker:
     build: .
     restart: unless-stopped
+    env_file:
+      - .env
     environment: *app-env
     depends_on:
       rabbitmq:
