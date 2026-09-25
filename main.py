@@ -1,18 +1,22 @@
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from prometheus_fastapi_instrumentator import Instrumentator
 from slowapi.errors import RateLimitExceeded
 
 from app.core.config import settings
 from app.core.rate_limit import limiter
+from app.core.storage import LocalStorage, get_storage
 from app.workers.broker import publisher
 from app.modules.auth.router import router as auth_router
 from app.modules.business.router import discovery_router
+from app.modules.business.router import options_router
 from app.modules.business.router import router as business_router
 from app.modules.business.router import team_router
 
@@ -73,6 +77,12 @@ app.include_router(auth_router, prefix=settings.API_V1_STR)
 app.include_router(discovery_router, prefix=settings.API_V1_STR)
 app.include_router(business_router, prefix=settings.API_V1_STR)
 app.include_router(team_router, prefix=settings.API_V1_STR)
+app.include_router(options_router, prefix=settings.API_V1_STR)
+
+if isinstance(get_storage(), LocalStorage):
+    # Dev only: serve locally stored uploads. With R2, files are served by R2 itself.
+    os.makedirs(settings.MEDIA_ROOT, exist_ok=True)
+    app.mount("/media", StaticFiles(directory=settings.MEDIA_ROOT), name="media")
 
 
 @app.exception_handler(HTTPException)

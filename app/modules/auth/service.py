@@ -261,10 +261,21 @@ class AuthService:
         if not user.password_hash or not verify_password(password, user.password_hash):
             raise _invalid_credentials(400, "Password is incorrect")
 
-        from app.modules.business.models import Business, Staff
+        from app.modules.business.models import Business, BusinessPhoto, Staff
+        from app.modules.business.tasks import delete_stored_object
 
         # Staff rows reference users without a FK, so clear them explicitly.
         await self.db.execute(delete(Staff).where(Staff.user_id == user.id))
+        photo_keys = [
+            key
+            for key in (
+                await self.db.execute(
+                    select(BusinessPhoto.storage_key)
+                    .join(Business, Business.id == BusinessPhoto.business_id)
+                    .where(Business.owner_id == user.id, BusinessPhoto.storage_key.is_not(None))
+                )
+            ).scalars()
+        ]
         # Delete owned businesses through the ORM so their child rows go too,
         # regardless of whether the DB enforces ON DELETE CASCADE (SQLite doesn't).
         owned = await self.db.execute(select(Business).where(Business.owner_id == user.id))
@@ -272,6 +283,9 @@ class AuthService:
             await self.db.delete(business)
         await self.db.delete(user)
         await self.db.commit()
+
+        for key in photo_keys:
+            await delete_stored_object.enqueue(key=key)
 
     # ─── OTP helpers ──────────────────────────────────────────
 

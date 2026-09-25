@@ -38,7 +38,9 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
 
-            cat > .env <<EOF
+            # Quoted delimiter: values are written literally, so a `$` in a
+            # secret isn't expanded by the server's shell.
+            cat > .env <<'EOF'
             DATABASE_URL=${{ secrets.DATABASE_URL }}
             SECRET_KEY=${{ secrets.SECRET_KEY }}
             REDIS_URL=redis://redis:6379/0
@@ -47,6 +49,20 @@ jobs:
             RESEND_FROM_EMAIL=${{ secrets.RESEND_FROM_EMAIL }}
             CLIENT_URL=${{ secrets.CLIENT_URL }}
             CORS_ORIGINS=${{ secrets.CORS_ORIGINS }}
+
+            # Google sign-in
+            GOOGLE_AUTH_CLIENT_ID=${{ secrets.GOOGLE_AUTH_CLIENT_ID }}
+            GOOGLE_AUTH_CLIENT_SECRET=${{ secrets.GOOGLE_AUTH_CLIENT_SECRET }}
+            GOOGLE_REDIRECT_URI=${{ vars.GOOGLE_REDIRECT_URI }}
+            GOOGLE_WEB_REDIRECT_URL=${{ vars.GOOGLE_WEB_REDIRECT_URL }}
+            GOOGLE_MOBILE_REDIRECT_URL=${{ vars.GOOGLE_MOBILE_REDIRECT_URL }}
+
+            # Cloudflare R2 (photo storage)
+            R2_ENDPOINT=${{ vars.R2_ENDPOINT }}
+            R2_BUCKET=${{ vars.R2_BUCKET }}
+            R2_PUBLIC_URL=${{ vars.R2_PUBLIC_URL }}
+            R2_ACCESS_KEY_ID=${{ secrets.R2_ACCESS_KEY_ID }}
+            R2_SECRET_ACCESS_KEY=${{ secrets.R2_SECRET_ACCESS_KEY }}
             EOF
 
             echo "=== Running migrations ==="

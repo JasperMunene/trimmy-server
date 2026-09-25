@@ -15,3 +15,5 @@ venv/
 .vscode/
 .idea/
 *.log
+# local upload storage (STORAGE_BACKEND=local)
+media/

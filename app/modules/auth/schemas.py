@@ -110,3 +110,13 @@ class CheckEmailRequest(BaseModel):
 
 class CheckEmailResponse(BaseModel):
     exists: bool
+
+
+class GoogleAuthUrlResponse(BaseModel):
+    url: str
+
+
+class GoogleExchangeRequest(BaseModel):
+    code: str = Field(..., min_length=1, max_length=256)
+    # Required if a code_challenge was sent to GET /auth/google/url.
+    code_verifier: Optional[str] = Field(None, min_length=43, max_length=128)

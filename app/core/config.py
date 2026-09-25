@@ -15,6 +15,22 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     REDIS_URL: str = "redis://localhost:6379/0"
     RABBITMQ_URL: str = "amqp://guest:guest@localhost:5672/"
+
+    # File storage for uploads (business photos, ...).
+    #   r2:    Cloudflare R2 (any S3-compatible store works); used when R2_BUCKET is set
+    #   local: files under MEDIA_ROOT, served by the API at MEDIA_BASE_URL (/media); dev only
+    STORAGE_BACKEND: str = ""  # empty = r2 if R2_BUCKET is set, else local
+    R2_ENDPOINT: str = ""  # https://<account_id>.r2.cloudflarestorage.com
+    R2_ACCESS_KEY_ID: str = ""
+    R2_SECRET_ACCESS_KEY: str = ""
+    R2_BUCKET: str = ""
+    # Public base URL of the bucket (r2.dev subdomain or custom domain), used in photo URLs.
+    R2_PUBLIC_URL: str = ""
+    MEDIA_ROOT: str = "media"
+    MEDIA_BASE_URL: str = "http://localhost:8000/media"
+    MAX_PHOTO_BYTES: int = 10 * 1024 * 1024
+    # How long a presigned upload URL stays valid.
+    UPLOAD_URL_EXPIRE_SECONDS: int = 600
     WORKER_CONCURRENCY: int = 10
 
     CORS_ORIGINS: List[str] = ["http://localhost:8081", "http://localhost:19006"]
@@ -22,6 +38,15 @@ class Settings(BaseSettings):
     RESEND_API_KEY: str = ""
     RESEND_FROM_EMAIL: str = "noreply@yourdomain.com"
     CLIENT_URL: str = "http://localhost:8081"
+
+    GOOGLE_AUTH_CLIENT_ID: str = ""
+    GOOGLE_AUTH_CLIENT_SECRET: str = ""
+    # This server's callback. Must be listed exactly under "Authorized redirect URIs"
+    # for the OAuth client in Google Cloud Console.
+    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/google/authorized"
+    # Where the callback sends the user afterwards, per platform.
+    GOOGLE_WEB_REDIRECT_URL: str = "http://localhost:8081/auth/google"
+    GOOGLE_MOBILE_REDIRECT_URL: str = "trimmy://auth/google"
 
     RATE_LIMIT_LOGIN: str = "5/minute"
     RATE_LIMIT_REGISTER: str = "3/minute"

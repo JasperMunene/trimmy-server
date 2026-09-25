@@ -11,6 +11,7 @@ from app.core.db_types import UUID, uuid4
 class AuthType(str, PyEnum):
     EMAIL = "email"
     PHONE = "phone"
+    GOOGLE = "google"
 
 
 class User(Base):
@@ -22,6 +23,8 @@ class User(Base):
     first_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     last_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     phone: Mapped[Optional[str]] = mapped_column(Text, unique=True, nullable=True, index=True)
+    # Google's stable account id ("sub"); set once the user has signed in with Google.
+    google_sub: Mapped[Optional[str]] = mapped_column(Text, unique=True, nullable=True, index=True)
     verified: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     auth_type: Mapped[AuthType] = mapped_column(String(20), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
