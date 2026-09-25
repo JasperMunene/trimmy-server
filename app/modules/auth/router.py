@@ -16,6 +16,7 @@ from app.modules.auth.schemas import (
     ChangePasswordResponse,
     CheckEmailRequest,
     CheckEmailResponse,
+    CompletePhoneRegistrationRequest,
     CompleteRegistrationRequest,
     DeleteAccountRequest,
     GoogleAuthUrlResponse,
@@ -27,6 +28,7 @@ from app.modules.auth.schemas import (
     RefreshRequest,
     RegisterRequest,
     RequestEmailOtpRequest,
+    RequestPhoneOtpRequest,
     ResendOtpRequest,
     ResetPasswordRequest,
     TokenResponse,
@@ -66,6 +68,23 @@ async def complete_registration(
 ):
     service = AuthService(db)
     return await service.complete_registration(data)
+
+
+@router.post("/request-phone-otp", response_model=MessageResponse)
+@limiter.limit(settings.RATE_LIMIT_CHECK_EMAIL)
+async def request_phone_otp(
+    request: Request, data: RequestPhoneOtpRequest, db: AsyncSession = Depends(get_db)
+):
+    service = AuthService(db)
+    return await service.request_phone_otp(data.phone)
+
+
+@router.post("/complete-phone-registration", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
+async def complete_phone_registration(
+    data: CompletePhoneRegistrationRequest, db: AsyncSession = Depends(get_db)
+):
+    service = AuthService(db)
+    return await service.complete_phone_registration(data)
 
 
 

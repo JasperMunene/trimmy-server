@@ -39,6 +39,14 @@ class Settings(BaseSettings):
     RESEND_FROM_EMAIL: str = "noreply@yourdomain.com"
     CLIENT_URL: str = "http://localhost:8081"
 
+    # SMS (HostPinnacle / Intacom gateway) for phone OTP delivery.
+    SMS_API_KEY: str = ""
+    SMS_USER_ID: str = ""
+    SMS_PASSWORD: str = ""
+    SMS_SENDER_ID: str = "Intacom"
+    # Region assumed when a phone number has no international prefix.
+    SMS_DEFAULT_COUNTRY: str = "KE"
+
     GOOGLE_AUTH_CLIENT_ID: str = ""
     GOOGLE_AUTH_CLIENT_SECRET: str = ""
     # This server's callback. Must be listed exactly under "Authorized redirect URIs"

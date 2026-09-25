@@ -33,6 +33,7 @@ QUEUES: dict[str, QueueSpec] = {
     for spec in (
         QueueSpec("default"),
         QueueSpec("emails", retry_delay_ms=30_000),
+        QueueSpec("sms", retry_delay_ms=30_000),
     )
 }
 

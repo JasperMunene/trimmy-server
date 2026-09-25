@@ -25,6 +25,19 @@ class CompleteRegistrationRequest(BaseModel):
     phone: Optional[str] = None
 
 
+class RequestPhoneOtpRequest(BaseModel):
+    phone: str = Field(..., min_length=6, max_length=32)
+
+
+class CompletePhoneRegistrationRequest(BaseModel):
+    phone: str = Field(..., min_length=6, max_length=32)
+    otp: str = Field(..., min_length=6, max_length=6)
+    password: str = Field(..., min_length=8, max_length=128)
+    first_name: str = Field(..., min_length=1, max_length=100)
+    last_name: str = Field(..., min_length=1, max_length=100)
+    email: Optional[EmailStr] = None
+
+
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str

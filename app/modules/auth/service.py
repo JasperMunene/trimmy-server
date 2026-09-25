@@ -26,6 +26,7 @@ from app.modules.auth.schemas import (
     ChangePasswordRequest,
     ChangePasswordResponse,
     CheckEmailResponse,
+    CompletePhoneRegistrationRequest,
     CompleteRegistrationRequest,
     ForgotPasswordRequest,
     LoginRequest,
@@ -38,7 +39,8 @@ from app.modules.auth.schemas import (
     VerifyEmailRequest,
     VerifyResetOtpRequest,
 )
-from app.modules.auth.tasks import send_otp_email
+from app.modules.auth.tasks import send_otp_email, send_otp_sms
+from app.core.phone_utils import normalise_phone, InvalidPhoneNumberError
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +168,104 @@ class AuthService:
         user.first_name = data.first_name
         user.last_name = data.last_name
         user.phone = data.phone
+        user.verified = True
+        user.verified_at = datetime.now(timezone.utc)
+
+        await self.db.delete(auth_token)
+        tokens = self._issue_tokens(user)
+
+        await self.db.commit()
+        await self.db.refresh(user)
+
+        return AuthResponse(user=UserResponse.model_validate(user), tokens=tokens)
+
+
+    async def request_phone_otp(self, raw_phone: str) -> dict:
+        """Step 1 of phone-first signup: send a verification OTP via SMS.
+
+        Mirrors request_email_otp: creates a pending (password-less) account so
+        the OTP has somewhere to attach. Refuses if the number already belongs
+        to a verified account.
+        """
+        try:
+            phone = normalise_phone(raw_phone, default_country=settings.SMS_DEFAULT_COUNTRY)
+        except InvalidPhoneNumberError:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "invalid_phone", "message": "Enter a valid phone number"},
+            )
+
+        existing = await self._get_user_by_phone(phone)
+        if existing and existing.verified:
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "phone_taken", "message": "An account with this phone number already exists"},
+            )
+
+        # Rate-limit sends per phone (OtpSendLog keys on a string identifier).
+        retry_after = await self._send_retry_after(phone, "verification")
+        if retry_after:
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "too_many_requests",
+                    "message": "Please wait before requesting another code.",
+                    "retry_after_seconds": retry_after,
+                },
+                headers={"Retry-After": str(retry_after)},
+            )
+
+        user = existing
+        if not user:
+            user = User(phone=phone, auth_type=AuthType.PHONE, verified=False)
+            self.db.add(user)
+            await self.db.flush()
+
+        await self._delete_tokens_by_purpose(user.id, "verification")
+        otp = self._generate_otp(user.id, purpose="verification")
+        self._log_send(phone, "verification")
+        await self.db.commit()
+
+        await send_otp_sms.enqueue(kind="verification", to=phone, otp=otp)
+        return {"message": "If the number is available, a verification code has been sent."}
+
+    async def complete_phone_registration(
+        self, data: CompletePhoneRegistrationRequest
+    ) -> AuthResponse:
+        """Step 2 of phone-first signup: verify the SMS OTP, set password +
+        profile, then issue tokens.
+        """
+        try:
+            phone = normalise_phone(data.phone, default_country=settings.SMS_DEFAULT_COUNTRY)
+        except InvalidPhoneNumberError:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "invalid_phone", "message": "Enter a valid phone number"},
+            )
+
+        user = await self._get_user_by_phone(phone)
+        user, auth_token = await self._check_otp_user(user, data.otp, "verification")
+
+        if user.verified and user.password_hash:
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "phone_taken", "message": "An account with this phone number already exists"},
+            )
+
+        if data.email:
+            taken = await self.db.execute(
+                select(User.id).where(User.email == data.email, User.id != user.id)
+            )
+            if taken.first():
+                raise HTTPException(
+                    status_code=409,
+                    detail={"error": "email_taken", "message": "Email is already in use"},
+                )
+
+        user.password_hash = get_password_hash(data.password)
+        user.first_name = data.first_name
+        user.last_name = data.last_name
+        user.email = data.email
         user.verified = True
         user.verified_at = datetime.now(timezone.utc)
 
@@ -445,6 +545,13 @@ class AuthService:
         self.db.add(OtpSendLog(email=email, purpose=purpose))
 
     async def _check_otp(self, email: str, otp: str, purpose: str) -> tuple[User, AuthToken]:
+        """Validate an OTP for the account owning `email`. See _check_otp_user."""
+        user = await self._get_user_by_email(email)
+        return await self._check_otp_user(user, otp, purpose)
+
+    async def _check_otp_user(
+        self, user: Optional[User], otp: str, purpose: str
+    ) -> tuple[User, AuthToken]:
         """Validate an OTP for a specific account, counting failed attempts.
 
         After OTP_MAX_ATTEMPTS wrong guesses the code is deleted and the user has
@@ -456,7 +563,6 @@ class AuthService:
             detail={"error": "invalid_otp", "message": f"Invalid or expired {noun} code"},
         )
 
-        user = await self._get_user_by_email(email)
         if not user:
             raise invalid
 
@@ -515,6 +621,10 @@ class AuthService:
 
     async def _get_user_by_email(self, email: str) -> Optional[User]:
         result = await self.db.execute(select(User).where(User.email == email))
+        return result.scalar_one_or_none()
+
+    async def _get_user_by_phone(self, phone: str) -> Optional[User]:
+        result = await self.db.execute(select(User).where(User.phone == phone))
         return result.scalar_one_or_none()
 
     async def _get_refresh_token(self, refresh_token: str) -> Optional[RefreshToken]:

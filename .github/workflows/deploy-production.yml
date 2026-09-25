@@ -47,6 +47,12 @@ jobs:
             RABBITMQ_PASSWORD=${{ secrets.RABBITMQ_PASSWORD }}
             RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
             RESEND_FROM_EMAIL=${{ secrets.RESEND_FROM_EMAIL }}
+
+            # SMS (HostPinnacle / Intacom) for phone OTP
+            SMS_API_KEY=${{ secrets.SMS_API_KEY }}
+            SMS_USER_ID=${{ secrets.SMS_USER_ID }}
+            SMS_PASSWORD=${{ secrets.SMS_PASSWORD }}
+            SMS_SENDER_ID=${{ secrets.SMS_SENDER_ID }}
             CLIENT_URL=${{ secrets.CLIENT_URL }}
             CORS_ORIGINS=${{ secrets.CORS_ORIGINS }}
 
