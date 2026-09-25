@@ -34,13 +34,17 @@ services:
     restart: unless-stopped
     ports:
       - "8001:8000"
+    env_file:
+      - .env
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://trimmy_app:trimmy@2026@host.docker.internal:5433/trimmy_staging}
       SECRET_KEY: ${SECRET_KEY}
       REDIS_URL: redis://redis:6379/0
       RABBITMQ_URL: amqp://timmy:${RABBITMQ_PASSWORD:-timmy_staging_password}@rabbitmq:5672/
-      RESEND_API_KEY: ${RESEND_API_KEY:-}
-      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-noreply@trimmy.com}
+      # RESEND_API_KEY / RESEND_FROM_EMAIL come from .env (via env_file above).
+      # Do NOT redeclare them here with ${VAR:-} — that would override the
+      # .env value with an empty string whenever the host shell var is unset,
+      # which is exactly why verification emails were silently not sending.
       CLIENT_URL: ${CLIENT_URL:-https://api.sandbox.trimmy.com}
       CORS_ORIGINS: ${CORS_ORIGINS}
     depends_on:

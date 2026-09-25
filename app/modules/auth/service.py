@@ -390,14 +390,19 @@ class AuthService:
 
     async def _send_verification_email(self, email: str, otp: str) -> None:
         if not settings.RESEND_API_KEY:
-            logger.info(f"Verification OTP for {email}: {otp}")
+            logger.warning(
+                "RESEND_API_KEY not configured — verification email NOT sent. "
+                "OTP for %s: %s",
+                email,
+                otp,
+            )
             return
 
         try:
             import resend
 
             resend.api_key = settings.RESEND_API_KEY
-            resend.Emails.send(
+            result = resend.Emails.send(
                 {
                     "from": settings.RESEND_FROM_EMAIL,
                     "to": email,
@@ -411,19 +416,25 @@ class AuthService:
                     """,
                 }
             )
+            logger.info("Verification email sent to %s (resend id=%s)", email, result.get("id"))
         except Exception as e:
-            logger.error(f"Failed to send verification email to {email}: {e}")
+            logger.exception("Failed to send verification email to %s: %s", email, e)
 
     async def _send_password_reset_email(self, email: str, otp: str) -> None:
         if not settings.RESEND_API_KEY:
-            logger.info(f"Password reset OTP for {email}: {otp}")
+            logger.warning(
+                "RESEND_API_KEY not configured — password reset email NOT sent. "
+                "OTP for %s: %s",
+                email,
+                otp,
+            )
             return
 
         try:
             import resend
 
             resend.api_key = settings.RESEND_API_KEY
-            resend.Emails.send(
+            result = resend.Emails.send(
                 {
                     "from": settings.RESEND_FROM_EMAIL,
                     "to": email,
@@ -437,5 +448,6 @@ class AuthService:
                     """,
                 }
             )
+            logger.info("Password reset email sent to %s (resend id=%s)", email, result.get("id"))
         except Exception as e:
-            logger.error(f"Failed to send password reset email to {email}: {e}")
+            logger.exception("Failed to send password reset email to %s: %s", email, e)
