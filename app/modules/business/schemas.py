@@ -295,6 +295,21 @@ class ListMyInvitationsResponse(BaseModel):
     invitations: List[MyInvitationResponse]
 
 
+# ─── My Businesses ───────────────────────────────────────────
+
+class MyBusinessResponse(BaseModel):
+    business_id: uuid_pkg.UUID = Field(alias="businessId")
+    name: str
+    status: str
+    role: str
+
+    model_config = {"populate_by_name": True}
+
+
+class ListMyBusinessesResponse(BaseModel):
+    businesses: List[MyBusinessResponse]
+
+
 # ─── Respond to Invitation ───────────────────────────────────
 
 class RespondToInvitationRequest(BaseModel):

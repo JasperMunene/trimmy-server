@@ -21,7 +21,7 @@ async def _create_otp(db_session, user_id, purpose="verification"):
 @pytest.mark.asyncio
 async def test_verify_email_success(client, unverified_user, db_session):
     otp = await _create_otp(db_session, unverified_user.id)
-    response = await client.post(f"/api/v1/auth/verify-email?otp={otp}")
+    response = await client.post("/api/v1/auth/verify-email", json={"email": unverified_user.email, "otp": otp})
     assert response.status_code == 200
     data = response.json()
     assert data["user"]["verified"] is True
@@ -30,7 +30,7 @@ async def test_verify_email_success(client, unverified_user, db_session):
 
 @pytest.mark.asyncio
 async def test_verify_email_invalid_otp(client, unverified_user):
-    response = await client.post("/api/v1/auth/verify-email?otp=000000")
+    response = await client.post("/api/v1/auth/verify-email", json={"email": unverified_user.email, "otp": "000000"})
     assert response.status_code == 400
     data = response.json()
     assert data["error"] == "invalid_otp"
@@ -47,7 +47,7 @@ async def test_verify_email_expired_otp(client, unverified_user, db_session):
     token.created_at = datetime.now(timezone.utc) - timedelta(hours=25)
     await db_session.commit()
 
-    response = await client.post(f"/api/v1/auth/verify-email?otp={otp}")
+    response = await client.post("/api/v1/auth/verify-email", json={"email": unverified_user.email, "otp": otp})
     assert response.status_code == 400
     data = response.json()
     assert data["error"] == "otp_expired"

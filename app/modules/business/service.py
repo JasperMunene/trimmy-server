@@ -826,6 +826,37 @@ class BusinessService:
             publishedAt=business.published_at,
         )
 
+    # ─── My Businesses ────────────────────────────────────────
+
+    async def list_my_businesses(self, user_id: uuid_pkg.UUID):
+        from app.modules.business.schemas import ListMyBusinessesResponse, MyBusinessResponse
+        owned = await self.db.execute(
+            select(Business)
+            .where(Business.owner_id == user_id)
+            .order_by(Business.created_at.asc())
+        )
+        items = [
+            MyBusinessResponse(businessId=b.id, name=b.name, status=b.status, role="owner")
+            for b in owned.scalars()
+        ]
+        owned_ids = {item.business_id for item in items}
+
+        memberships = await self.db.execute(
+            select(Staff, Business)
+            .join(Business, Business.id == Staff.business_id)
+            .where(Staff.user_id == user_id)
+            .order_by(Staff.created_at.asc())
+        )
+        for staff, business in memberships.all():
+            # Owners also get a Staff row (role "owner") on their own business when it's published.
+            if business.id in owned_ids:
+                continue
+            owned_ids.add(business.id)
+            items.append(MyBusinessResponse(
+                businessId=business.id, name=business.name, status=business.status, role=staff.role,
+            ))
+        return ListMyBusinessesResponse(businesses=items)
+
     # ─── Team Invitations (received) ──────────────────────────
 
     async def list_my_invitations(self, user_id: str):

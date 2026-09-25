@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     REDIS_URL: str = "redis://localhost:6379/0"
     RABBITMQ_URL: str = "amqp://guest:guest@localhost:5672/"
+    WORKER_CONCURRENCY: int = 10
 
     CORS_ORIGINS: List[str] = ["http://localhost:8081", "http://localhost:19006"]
 
@@ -24,6 +25,11 @@ class Settings(BaseSettings):
 
     RATE_LIMIT_LOGIN: str = "5/minute"
     RATE_LIMIT_REGISTER: str = "3/minute"
+    RATE_LIMIT_CHECK_EMAIL: str = "10/minute"
+
+    OTP_MAX_ATTEMPTS: int = 5
+    OTP_RESEND_COOLDOWN_SECONDS: int = 60
+    OTP_MAX_SENDS_PER_HOUR: int = 5
 
     model_config = SettingsConfigDict(
         env_file=".env",
