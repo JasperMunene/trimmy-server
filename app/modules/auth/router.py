@@ -16,6 +16,7 @@ from app.modules.auth.schemas import (
     ChangePasswordResponse,
     CheckEmailRequest,
     CheckEmailResponse,
+    CompleteRegistrationRequest,
     DeleteAccountRequest,
     GoogleAuthUrlResponse,
     GoogleExchangeRequest,
@@ -25,6 +26,7 @@ from app.modules.auth.schemas import (
     MessageResponse,
     RefreshRequest,
     RegisterRequest,
+    RequestEmailOtpRequest,
     ResendOtpRequest,
     ResetPasswordRequest,
     TokenResponse,
@@ -47,6 +49,24 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
     service = AuthService(db)
     return await service.register(data)
+
+
+@router.post("/request-email-otp", response_model=MessageResponse)
+@limiter.limit(settings.RATE_LIMIT_CHECK_EMAIL)
+async def request_email_otp(
+    request: Request, data: RequestEmailOtpRequest, db: AsyncSession = Depends(get_db)
+):
+    service = AuthService(db)
+    return await service.request_email_otp(data.email)
+
+
+@router.post("/complete-registration", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
+async def complete_registration(
+    data: CompleteRegistrationRequest, db: AsyncSession = Depends(get_db)
+):
+    service = AuthService(db)
+    return await service.complete_registration(data)
+
 
 
 @router.post("/login", response_model=AuthResponse)

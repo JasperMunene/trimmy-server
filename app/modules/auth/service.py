@@ -26,6 +26,7 @@ from app.modules.auth.schemas import (
     ChangePasswordRequest,
     ChangePasswordResponse,
     CheckEmailResponse,
+    CompleteRegistrationRequest,
     ForgotPasswordRequest,
     LoginRequest,
     RegisterRequest,
@@ -95,6 +96,87 @@ class AuthService:
         await send_otp_email.enqueue(kind="verification", to=user.email, otp=otp)
 
         return AuthResponse(user=UserResponse.model_validate(user), tokens=tokens)
+
+    async def request_email_otp(self, email: str) -> dict:
+        """Step 1 of email-first signup: send a verification OTP for an email.
+
+        Creates a pending (password-less, unverified) account if none exists so
+        the OTP has somewhere to attach. If the email already belongs to a
+        verified account, refuse — that address is taken.
+        """
+        existing = await self._get_user_by_email(email)
+        if existing and existing.verified:
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "email_taken", "message": "An account with this email already exists"},
+            )
+
+        # Rate-limit sends per email (same limiter as resend/forgot).
+        retry_after = await self._send_retry_after(email, "verification")
+        if retry_after:
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "too_many_requests",
+                    "message": "Please wait before requesting another code.",
+                    "retry_after_seconds": retry_after,
+                },
+                headers={"Retry-After": str(retry_after)},
+            )
+
+        user = existing
+        if not user:
+            # Pending account: no password yet, filled in at complete_registration.
+            user = User(email=email, auth_type=AuthType.EMAIL, verified=False)
+            self.db.add(user)
+            await self.db.flush()
+
+        await self._delete_tokens_by_purpose(user.id, "verification")
+        otp = self._generate_otp(user.id, purpose="verification")
+        self._log_send(email, "verification")
+        await self.db.commit()
+
+        await send_otp_email.enqueue(kind="verification", to=email, otp=otp)
+        return {"message": "If the email is available, a verification code has been sent."}
+
+    async def complete_registration(self, data: CompleteRegistrationRequest) -> AuthResponse:
+        """Step 2 of email-first signup: verify the OTP and set the account's
+        password + profile, then issue tokens.
+        """
+        user, auth_token = await self._check_otp(data.email, data.otp, "verification")
+
+        if user.verified and user.password_hash:
+            # Already a full, verified account — don't let this path hijack it.
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "email_taken", "message": "An account with this email already exists"},
+            )
+
+        if data.phone:
+            taken = await self.db.execute(
+                select(User.id).where(User.phone == data.phone, User.id != user.id)
+            )
+            if taken.first():
+                raise HTTPException(
+                    status_code=409,
+                    detail={"error": "phone_taken", "message": "Phone number is already in use"},
+                )
+
+        user.password_hash = get_password_hash(data.password)
+        user.first_name = data.first_name
+        user.last_name = data.last_name
+        user.phone = data.phone
+        user.verified = True
+        user.verified_at = datetime.now(timezone.utc)
+
+        await self.db.delete(auth_token)
+        tokens = self._issue_tokens(user)
+
+        await self.db.commit()
+        await self.db.refresh(user)
+
+        return AuthResponse(user=UserResponse.model_validate(user), tokens=tokens)
+
 
     async def login(self, data: LoginRequest) -> AuthResponse:
         user = await self._get_user_by_email(data.email)

@@ -12,6 +12,19 @@ class RegisterRequest(BaseModel):
     phone: Optional[str] = None
 
 
+class RequestEmailOtpRequest(BaseModel):
+    email: EmailStr
+
+
+class CompleteRegistrationRequest(BaseModel):
+    email: EmailStr
+    otp: str = Field(..., min_length=6, max_length=6)
+    password: str = Field(..., min_length=8, max_length=128)
+    first_name: str = Field(..., min_length=1, max_length=100)
+    last_name: str = Field(..., min_length=1, max_length=100)
+    phone: Optional[str] = None
+
+
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
