@@ -1,6 +1,6 @@
 import uuid as uuid_pkg
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.modules.booking import availability
+from app.modules.booking.models import ACTIVE_STATUSES, Booking
 from app.modules.booking.schemas import (
     DayAvailabilityResponse,
     DaySlotsResponse,
@@ -53,7 +54,7 @@ class AvailabilityService:
             day=day,
             weekly_hours=ctx.business.working_hours.weekly_hours if ctx.business.working_hours else None,
             staff=ctx.staff,
-            bookings=await self._existing_bookings(ctx.business.id, start, start.replace(hour=23, minute=59)),
+            bookings=await self._existing_bookings(ctx, start, start + timedelta(days=1)),
             service_ids=ctx.service_ids,
             duration_minutes=ctx.duration_minutes,
             settings=ctx.settings,
@@ -87,7 +88,7 @@ class AvailabilityService:
             days=days,
             weekly_hours=ctx.business.working_hours.weekly_hours if ctx.business.working_hours else None,
             staff=ctx.staff,
-            bookings=await self._existing_bookings(ctx.business.id, start, end),
+            bookings=await self._existing_bookings(ctx, start, end),
             service_ids=ctx.service_ids,
             duration_minutes=ctx.duration_minutes,
             settings=ctx.settings,
@@ -170,11 +171,38 @@ class AvailabilityService:
             mapping.setdefault(row.staff_id, []).append(row.service_id)
         return mapping
 
-    async def _existing_bookings(
-        self, business_id: uuid_pkg.UUID, start: datetime, end: datetime
-    ) -> list[availability.ExistingBooking]:
-        """Bookings that could conflict in [start, end), in one query.
+    async def _existing_bookings(self, ctx: _Context, start: datetime, end: datetime) -> list[availability.ExistingBooking]:
+        """Active bookings that could conflict with slots in [start, end), in one query.
 
-        There is no bookings table until BK-20; this is where it plugs in.
+        Widened by the buffer on both sides, since a booking's buffer can reach into the window.
         """
-        return []
+        margin = timedelta(minutes=ctx.settings.buffer_minutes)
+        rows = (
+            await self.db.execute(
+                select(Booking)
+                .where(
+                    Booking.business_id == ctx.business.id,
+                    Booking.status.in_(ACTIVE_STATUSES),
+                    Booking.starts_at < end + margin,
+                    Booking.ends_at > start - margin,
+                )
+                .options(selectinload(Booking.lines))
+            )
+        ).scalars().all()
+        return [to_existing(b) for b in rows]
+
+
+def _aware(dt: datetime) -> datetime:
+    # SQLite returns naive datetimes; Postgres returns aware ones. Both are UTC.
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def to_existing(b: Booking) -> availability.ExistingBooking:
+    return availability.ExistingBooking(
+        start=_aware(b.starts_at),
+        end=_aware(b.ends_at),
+        status=b.status,
+        staff_id=b.staff_id,
+        service_ids=frozenset(line.service_id for line in b.lines if line.service_id),
+        expires_at=_aware(b.expires_at) if b.expires_at else None,
+    )

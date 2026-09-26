@@ -13,7 +13,7 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | BK-05 | Run tests on Postgres in CI | M0 | S | — | | todo |
 | BK-10 | Availability engine (pure function) | M1 | L | BK-02, BK-03, BK-04 | eslieh | done |
 | BK-11 | Availability endpoints | M1 | M | BK-10 | eslieh | done |
-| BK-20 | Booking tables, state machine, exclusion constraint | M2 | M | BK-02, BK-05 | | todo |
+| BK-20 | Booking tables, state machine, exclusion constraint | M2 | M | BK-02, BK-05 | eslieh | done |
 | BK-21 | Price and deposit calculator | M2 | S | — | | todo |
 | BK-22 | `POST /bookings` | M2 | L | BK-10, BK-20, BK-21 | | todo |
 | BK-23 | `GET /bookings/{id}` and `GET /me/bookings` | M2 | S | BK-20 | | todo |
@@ -100,7 +100,7 @@ The exclusion constraint (D9) can't be tested on SQLite.
 - Only published businesses; `serviceIds` must belong to the business; a given `staffId` must perform every chosen service.
 
 - [x] Typed `response_model`s, and errors in `{ error, message }` (`tests/test_availability_api.py`).
-- [ ] One query per request for the day's bookings, not one per staff member. The hook is `AvailabilityService._existing_bookings`, which returns no bookings until BK-20 adds the table.
+- [x] One query per request for the day's bookings, not one per staff member (`AvailabilityService._existing_bookings`, filled in by BK-20).
 
 ## M2: Bookings without a deposit
 
@@ -108,8 +108,9 @@ The exclusion constraint (D9) can't be tested on SQLite.
 - Tables `bookings`, `booking_services`, `booking_events` (PLAN.md section 4.1); `staff_id` is nullable (D4). On Postgres, add the `btree_gist` extension and the exclusion constraint on active **assigned** bookings per staff member.
 - `transition(booking, to, actor, reason)`, which enforces the diagram in PLAN.md section 4.2 and writes a `booking_events` row.
 
-- [ ] An illegal transition raises a clear error; tests cover every allowed and disallowed pair.
-- [ ] Overlapping active bookings for one staff member are rejected by the database (a `postgres_only` test).
+- [x] An illegal transition raises a clear error; tests cover every allowed and disallowed pair (`tests/test_booking_states.py`).
+- [ ] Overlapping active bookings for one staff member are rejected by the database. The constraint is in migration `009` and the model (Postgres only); its test is written but skips until BK-05 runs the suite on Postgres.
+- Also added: a short `reference` per booking (`BK` + 6 characters), usable as the M-Pesa till `AccountReference` and on receipts.
 
 ### BK-21 · Price and deposit calculator
 A pure function: `(services with quantities, policies) -> { total, deposit | None }`.
