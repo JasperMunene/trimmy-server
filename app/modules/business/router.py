@@ -8,6 +8,7 @@ from app.modules.auth.models import User
 from app.modules.business import payment_options
 from app.modules.business.schemas import (
     AddTeamMemberRequest,
+    BookingSettingsResponse,
     BusinessProfileResponse,
     CompletePhotoUploadRequest,
     CreateBusinessRequest,
@@ -35,9 +36,12 @@ from app.modules.business.schemas import (
     ServiceResponse,
     SetPaymentDestinationRequest,
     SetPoliciesRequest,
+    SetStaffServicesRequest,
     SetTeamModeRequest,
+    StaffServicesResponse,
     TeamMemberResponse,
     TeamModeResponse,
+    UpdateBookingSettingsRequest,
     UpdateBusinessResponse,
     UpdateServiceRequest,
     UpdateTeamMemberRequest,
@@ -295,6 +299,42 @@ async def invite_team_member(
 ):
     service = BusinessService(db)
     return await service.invite_team_member(business_id, str(current_user.id), data)
+
+
+@router.patch("/{business_id}/booking-settings", response_model=BookingSettingsResponse)
+async def update_booking_settings(
+    business_id: str,
+    data: UpdateBookingSettingsRequest,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Timezone and slot rules used by availability. Current values are in GET /businesses/{id}."""
+    service = BusinessService(db)
+    return await service.update_booking_settings(business_id, str(current_user.id), data)
+
+
+@router.get("/{business_id}/staff/{staff_id}/services", response_model=StaffServicesResponse)
+async def get_staff_services(
+    business_id: str,
+    staff_id: str,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = BusinessService(db)
+    return await service.get_staff_services(business_id, str(current_user.id), staff_id)
+
+
+@router.put("/{business_id}/staff/{staff_id}/services", response_model=StaffServicesResponse)
+async def set_staff_services(
+    business_id: str,
+    staff_id: str,
+    data: SetStaffServicesRequest,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Which services this staff member performs (drives availability and booking)."""
+    service = BusinessService(db)
+    return await service.set_staff_services(business_id, str(current_user.id), staff_id, data)
 
 
 @router.get("/{business_id}/team/members", response_model=ListTeamMembersResponse)

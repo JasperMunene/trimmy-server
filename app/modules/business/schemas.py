@@ -84,6 +84,7 @@ class GetBusinessResponse(BaseModel):
     policies: Optional["PoliciesResponse"] = None
     payment_destination: Optional["PaymentDestinationResponse"] = Field(None, alias="paymentDestination")
     team_mode: Optional[str] = Field(None, alias="teamMode")
+    booking_settings: Optional["BookingSettingsResponse"] = Field(None, alias="bookingSettings")
     status: str
     onboarding_step: Optional[str] = Field(None, alias="onboardingStep")
 
@@ -455,6 +456,9 @@ class StaffMemberResponse(BaseModel):
     role: str
     # Null = works whenever the business is open.
     working_days: Optional[List[str]] = Field(None, alias="workingDays")
+    # allServices true = performs every service; otherwise only serviceIds (possibly none).
+    all_services: bool = Field(True, alias="allServices")
+    service_ids: List[uuid_pkg.UUID] = Field([], alias="serviceIds")
     rating: float
     avatar_url: Optional[str] = Field(None, alias="avatarUrl")
     bio: Optional[str] = None
@@ -531,6 +535,35 @@ class BusinessProfileResponse(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+# ─── Booking settings ────────────────────────────────────────
+
+class UpdateBookingSettingsRequest(BaseModel):
+    """Only the fields sent are changed."""
+
+    timezone: Optional[str] = Field(None, examples=["Africa/Nairobi"])
+    # Customers see start times on this grid. Must divide an hour evenly.
+    slot_interval_minutes: Optional[int] = Field(None, alias="slotIntervalMinutes", ge=5, le=60)
+    # Kept free after each booking (clean-up, turnover).
+    buffer_minutes: Optional[int] = Field(None, alias="bufferMinutes", ge=0, le=120)
+    # How soon from now the earliest bookable slot is.
+    min_lead_minutes: Optional[int] = Field(None, alias="minLeadMinutes", ge=0, le=7 * 24 * 60)
+    # How far ahead customers can book.
+    max_days_ahead: Optional[int] = Field(None, alias="maxDaysAhead", ge=1, le=365)
+
+    model_config = {"populate_by_name": True}
+
+
+class BookingSettingsResponse(BaseModel):
+    business_id: uuid_pkg.UUID = Field(alias="businessId")
+    timezone: str
+    slot_interval_minutes: int = Field(alias="slotIntervalMinutes")
+    buffer_minutes: int = Field(alias="bufferMinutes")
+    min_lead_minutes: int = Field(alias="minLeadMinutes")
+    max_days_ahead: int = Field(alias="maxDaysAhead")
+
+    model_config = {"populate_by_name": True}
+
+
 GetBusinessResponse.model_rebuild()
 PoliciesResponse.model_rebuild()
 
@@ -587,3 +620,23 @@ class BankOption(BaseModel):
 class PaymentDestinationOptionsResponse(BaseModel):
     types: List[PaymentTypeOption]
     banks: List[BankOption]
+
+
+# ─── Staff services ──────────────────────────────────────────
+
+class SetStaffServicesRequest(BaseModel):
+    """allServices: true (and no serviceIds) = performs every service, including ones added later.
+    allServices: false = performs exactly serviceIds, which may be empty (e.g. front desk)."""
+
+    all_services: bool = Field(alias="allServices")
+    service_ids: List[uuid_pkg.UUID] = Field([], alias="serviceIds")
+
+    model_config = {"populate_by_name": True}
+
+
+class StaffServicesResponse(BaseModel):
+    staff_id: uuid_pkg.UUID = Field(alias="staffId")
+    all_services: bool = Field(alias="allServices")
+    service_ids: List[uuid_pkg.UUID] = Field(alias="serviceIds")
+
+    model_config = {"populate_by_name": True}

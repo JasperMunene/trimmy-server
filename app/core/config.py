@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     MEDIA_ROOT: str = "media"
     MEDIA_BASE_URL: str = "http://localhost:8000/media"
     MAX_PHOTO_BYTES: int = 10 * 1024 * 1024
+
+    # How long an unpaid booking (pending_payment) holds its slot (docs/booking/PLAN.md, D6).
+    BOOKING_HOLD_MINUTES: int = 10
     # How long a presigned upload URL stays valid.
     UPLOAD_URL_EXPIRE_SECONDS: int = 600
     WORKER_CONCURRENCY: int = 10

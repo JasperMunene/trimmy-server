@@ -15,8 +15,10 @@ from app.core.rate_limit import limiter
 from app.core.storage import LocalStorage, get_storage
 from app.workers.broker import publisher
 from app.modules.auth.router import router as auth_router
+from app.modules.booking.router import availability_router, bookings_router, my_bookings_router
 from app.modules.business.router import discovery_router
 from app.modules.business.router import options_router
+from app.modules.payments.router import booking_payments_router
 from app.modules.payments.router import router as payments_router
 from app.modules.business.router import router as business_router
 from app.modules.business.router import team_router
@@ -76,10 +78,15 @@ app.include_router(auth_router, prefix=settings.API_V1_STR)
 # discovery_router must precede business_router: its GET /businesses/search
 # would otherwise match the authed GET /businesses/{business_id} route.
 app.include_router(discovery_router, prefix=settings.API_V1_STR)
+# Public like discovery, and before business_router for the same reason.
+app.include_router(availability_router, prefix=settings.API_V1_STR)
 app.include_router(business_router, prefix=settings.API_V1_STR)
 app.include_router(team_router, prefix=settings.API_V1_STR)
 app.include_router(options_router, prefix=settings.API_V1_STR)
 app.include_router(payments_router, prefix=settings.API_V1_STR)
+app.include_router(bookings_router, prefix=settings.API_V1_STR)
+app.include_router(booking_payments_router, prefix=settings.API_V1_STR)
+app.include_router(my_bookings_router, prefix=settings.API_V1_STR)
 
 if isinstance(get_storage(), LocalStorage):
     # Dev only: serve locally stored uploads. With R2, files are served by R2 itself.
