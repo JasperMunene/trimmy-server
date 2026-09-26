@@ -31,12 +31,13 @@ def _validation_error(message: str) -> HTTPException:
 
 
 @dataclass
-class _Context:
+class AvailabilityContext:
     business: Business
     staff: list[availability.StaffInfo]
     settings: availability.Settings
     service_ids: set[uuid_pkg.UUID]
     duration_minutes: int
+    services: dict[uuid_pkg.UUID, Service]
 
 
 class AvailabilityService:
@@ -47,14 +48,14 @@ class AvailabilityService:
     async def day(
         self, business_id: str, day: date, service_ids: list[uuid_pkg.UUID], staff_id: Optional[uuid_pkg.UUID]
     ) -> DaySlotsResponse:
-        ctx = await self._context(business_id, service_ids, staff_id)
+        ctx = await self.context(business_id, service_ids, staff_id)
         tz = ZoneInfo(ctx.settings.timezone)
         start = datetime.combine(day, datetime.min.time(), tz)
         slots = availability.day_slots(
             day=day,
             weekly_hours=ctx.business.working_hours.weekly_hours if ctx.business.working_hours else None,
             staff=ctx.staff,
-            bookings=await self._existing_bookings(ctx, start, start + timedelta(days=1)),
+            bookings=await self.existing_bookings(ctx, start, start + timedelta(days=1)),
             service_ids=ctx.service_ids,
             duration_minutes=ctx.duration_minutes,
             settings=ctx.settings,
@@ -78,7 +79,7 @@ class AvailabilityService:
     ) -> DaysResponse:
         if not 1 <= days <= MAX_DAYS:
             raise _validation_error(f"days must be between 1 and {MAX_DAYS}")
-        ctx = await self._context(business_id, service_ids, staff_id)
+        ctx = await self.context(business_id, service_ids, staff_id)
         tz = ZoneInfo(ctx.settings.timezone)
         start_day = start_day or self.now.astimezone(tz).date()
         start = datetime.combine(start_day, datetime.min.time(), tz)
@@ -88,7 +89,7 @@ class AvailabilityService:
             days=days,
             weekly_hours=ctx.business.working_hours.weekly_hours if ctx.business.working_hours else None,
             staff=ctx.staff,
-            bookings=await self._existing_bookings(ctx, start, end),
+            bookings=await self.existing_bookings(ctx, start, end),
             service_ids=ctx.service_ids,
             duration_minutes=ctx.duration_minutes,
             settings=ctx.settings,
@@ -101,9 +102,9 @@ class AvailabilityService:
             days=[DayAvailabilityResponse(date=d.date, isOpen=d.is_open, hasSlots=d.has_slots) for d in result],
         )
 
-    async def _context(
+    async def context(
         self, business_id: str, service_ids: list[uuid_pkg.UUID], staff_id: Optional[uuid_pkg.UUID]
-    ) -> _Context:
+    ) -> "AvailabilityContext":
         try:
             bid = uuid_pkg.UUID(str(business_id))
         except ValueError:
@@ -112,7 +113,11 @@ class AvailabilityService:
             await self.db.execute(
                 select(Business)
                 .where(Business.id == bid, Business.status == BusinessStatus.PUBLISHED)
-                .options(selectinload(Business.working_hours), selectinload(Business.staff))
+                .options(
+                    selectinload(Business.working_hours),
+                    selectinload(Business.staff),
+                    selectinload(Business.policies),
+                )
             )
         ).scalar_one_or_none()
         if not business:
@@ -148,7 +153,7 @@ class AvailabilityService:
                     detail={"error": "staff_cannot_perform", "message": "This staff member doesn't offer all of the chosen services"},
                 )
 
-        return _Context(
+        return AvailabilityContext(
             business=business,
             staff=staff,
             settings=availability.Settings(
@@ -160,6 +165,7 @@ class AvailabilityService:
             ),
             service_ids=set(wanted),
             duration_minutes=sum(s.duration_minutes for s in services),
+            services={s.id: s for s in services},
         )
 
     async def _staff_services(self, staff_ids: list) -> dict:
@@ -171,7 +177,7 @@ class AvailabilityService:
             mapping.setdefault(row.staff_id, []).append(row.service_id)
         return mapping
 
-    async def _existing_bookings(self, ctx: _Context, start: datetime, end: datetime) -> list[availability.ExistingBooking]:
+    async def existing_bookings(self, ctx: "AvailabilityContext", start: datetime, end: datetime) -> list[availability.ExistingBooking]:
         """Active bookings that could conflict with slots in [start, end), in one query.
 
         Widened by the buffer on both sides, since a booking's buffer can reach into the window.

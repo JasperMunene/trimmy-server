@@ -4,6 +4,79 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-27 · Create a booking (BK-22)
+
+**Why:** replaces the mocked `createBooking` (`USE_MOCK_BOOKING`). The server prices the booking itself, checks the slot is still free, and holds it while a deposit is paid.
+
+**Replaces → `booking.json#create-booking`** (the request is much smaller than today's)
+
+```json
+{
+  "id": "create-booking",
+  "status": "live",
+  "screen": "Review & Policies",
+  "story": "C2",
+  "method": "POST",
+  "path": "/bookings",
+  "auth": "any signed-in, verified user",
+  "description": "Send only what the customer chose: names, prices, totals and the deposit come from the server. staffId null = 'Any available' (left unassigned for the owner to assign). time must be one of the slots from get-availability. No deposit: status confirmed. Deposit due: status pending_payment, and the slot is held until expiresAt (10 minutes); paying it is the next task (BK-31). expectedTotal is optional: send the total the customer saw, and if prices changed you get 409 price_changed with the new total instead of a booking.",
+  "request": {
+    "businessId": "uuid",
+    "staffId": "uuid | null",
+    "services": [{ "serviceId": "uuid", "quantity": 1 }],
+    "date": "2026-10-05",
+    "time": "14:30",
+    "notes": "Short on the sides",
+    "expectedTotal": { "amount": 800, "currency": "KES" }
+  },
+  "response": {
+    "bookingId": "uuid",
+    "reference": "BK7F3AQ9",
+    "businessId": "uuid",
+    "businessName": "Glow Beauty Lounge",
+    "customerName": "Amina W",
+    "customerPhone": "+254722000111",
+    "customerEmail": "amina@example.com",
+    "staffId": "uuid | null",
+    "staffName": "Jane Wanjiru | Any available",
+    "services": [{ "serviceId": "uuid", "name": "Classic Haircut", "durationMinutes": 45, "price": { "amount": 800, "currency": "KES" }, "quantity": 1 }],
+    "date": "2026-10-05",
+    "time": "14:30",
+    "startsAt": "2026-10-05T14:30:00+03:00",
+    "durationMinutes": 45,
+    "totalAmount": { "amount": 800, "currency": "KES" },
+    "depositAmount": null,
+    "status": "confirmed",
+    "source": "online",
+    "paymentStatus": "unpaid",
+    "paymentMethod": null,
+    "paymentReference": null,
+    "expiresAt": null,
+    "cancelReason": null,
+    "notes": "Short on the sides",
+    "createdAt": "2026-09-27T10:00:00Z"
+  },
+  "errors": [
+    { "status": 409, "code": "slot_unavailable", "message": "The selected time is no longer available" },
+    { "status": 409, "code": "price_changed", "message": "Prices have changed since you started; please review the new total", "totalAmount": { "amount": 900, "currency": "KES" } },
+    { "status": 400, "code": "staff_cannot_perform", "message": "This staff member doesn't offer all of the chosen services" },
+    { "status": 400, "code": "own_business", "message": "You can't book your own business as a customer" },
+    { "status": 400, "code": "validation_error", "message": "serviceIds contains services not in this business: …" },
+    { "status": 404, "code": "not_found", "message": "No published business found for this id" }
+  ]
+}
+```
+
+**App code to update**
+
+- `CreateBookingInput` in `src/api/booking.ts`: drop `businessName`, `customerName`, `staffName`, each service's `name`/`durationMinutes`/`price`, `durationMinutes`, `totalAmount` and `depositAmount`. Send `services: [{ serviceId, quantity }]`, and the total shown on Review & Policies as `expectedTotal`.
+- Show the returned booking as-is (it's the same `Booking` shape as today, plus `reference`, `startsAt`, `expiresAt`, `cancelReason`, `notes`).
+- On `409 slot_unavailable`, send the customer back to Select Date & Time and refresh the slots. On `409 price_changed`, show the new `totalAmount` and ask them to confirm again.
+- `paymentStatus` can now also be `deposit_paid`.
+- For `pending_payment`, show a countdown to `expiresAt`. The payment step itself (replacing `confirmBookingPayment`) comes with BK-31.
+
+---
+
 ## 2026-09-26 · Server-side availability (BK-11)
 
 **Why:** replaces `getUpcomingDays` and `getTimeSlots` in `src/utils/availability.ts`. The server knows each staff member's working days and services, the business's booking settings, and (from BK-20) existing bookings. Until bookings exist on the server, slots only reflect hours, staff and settings.

@@ -2,14 +2,18 @@ import uuid as uuid_pkg
 from datetime import date
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.modules.booking.schemas import DaySlotsResponse, DaysResponse
+from app.core.dependencies import get_current_verified_user
+from app.modules.auth.models import User
+from app.modules.booking.bookings import BookingsService
+from app.modules.booking.schemas import BookingResponse, CreateBookingRequest, DaySlotsResponse, DaysResponse
 from app.modules.booking.service import AvailabilityService
 
 availability_router = APIRouter(prefix="/businesses", tags=["Booking"])
+bookings_router = APIRouter(prefix="/bookings", tags=["Booking"])
 
 _SERVICE_IDS = Query(..., alias="serviceIds", description="Repeat for each service: ?serviceIds=a&serviceIds=b")
 
@@ -37,3 +41,14 @@ async def availability_for_day(
 ):
     """Bookable start times on one day for these services. Omit staffId for "any available". Public."""
     return await AvailabilityService(db).day(business_id, day, service_ids, staff_id)
+
+
+@bookings_router.post("", status_code=status.HTTP_201_CREATED, response_model=BookingResponse)
+async def create_booking(
+    data: CreateBookingRequest,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Book a slot. No deposit: confirmed at once. Deposit due: pending_payment, holding the
+    slot until expiresAt (pay via POST /bookings/{id}/payments, BK-31)."""
+    return await BookingsService(db).create(current_user, data)

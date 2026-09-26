@@ -15,7 +15,7 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | BK-11 | Availability endpoints | M1 | M | BK-10 | eslieh | done |
 | BK-20 | Booking tables, state machine, exclusion constraint | M2 | M | BK-02, BK-05 | eslieh | done |
 | BK-21 | Price and deposit calculator | M2 | S | — | eslieh | done |
-| BK-22 | `POST /bookings` | M2 | L | BK-10, BK-20, BK-21 | | todo |
+| BK-22 | `POST /bookings` | M2 | L | BK-10, BK-20, BK-21 | eslieh | done |
 | BK-23 | `GET /bookings/{id}` and `GET /me/bookings` | M2 | S | BK-20 | | todo |
 | BK-24 | Expire unpaid holds | M2 | S | BK-20, BK-25 | | todo |
 | BK-25 | Periodic jobs in the worker (`--beat`) | M2 | M | — | | todo |
@@ -50,7 +50,8 @@ Walk through PLAN.md section 3 and record each outcome there.
 - [x] D1 payment routing, D2 sandbox first, D4 unassigned "any available", D5 15-minute grid, D6 10-minute hold (decided 2026-09-26).
 - [x] D3 implemented in BK-02.
 - [x] D8 implemented in BK-04.
-- [ ] D7 and D9 (technical proposals) accepted or changed by the engineers picking up M2.
+- [x] D7 implemented in BK-22.
+- [ ] D9 (technical proposal) accepted or changed once BK-05/BK-50 run it on Postgres.
 
 ### BK-02 · Staff identity: `Staff.id` as `staffId`, working days on `Staff`
 Today one person is a `TeamInvitation` (roster, `workingDays`, `commissionPercent`) and a `Staff` row (created on accept). Availability and bookings need one id.
@@ -125,9 +126,10 @@ A pure function: `(services with quantities, policies) -> { total, deposit | Non
 - No deposit gives `confirmed`. A deposit gives `pending_payment` with `expires_at = now + 10 min` (D6).
 - Snapshot the customer's name and phone from their account.
 
-- [ ] Two parallel requests for the same slot give one 201 and one 409 (full check in BK-50).
-- [ ] A changed `expectedTotal` returns 409 `price_changed` with the current total.
-- [ ] The booking can't be for your own business's staff when you're the owner (return 400).
+- [ ] Two parallel requests for the same slot give one 201 and one 409. Sequential double-booking is tested; the parallel case needs Postgres (BK-50).
+- [x] A changed `expectedTotal` returns 409 `price_changed` with the current total.
+- [x] The booking can't be for your own business's staff when you're the owner (400 `own_business`).
+- Also: expired holds in that business are released on the spot before the slot check (so they can't trip the constraint), and times off the slot grid or outside hours return 409 (`tests/test_create_booking.py`).
 
 ### BK-23 · `GET /bookings/{id}` and `GET /me/bookings`
 - The customer who booked, and the business's owner or staff, can read a booking; everyone else gets 404.
