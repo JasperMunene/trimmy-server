@@ -17,7 +17,7 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | BK-21 | Price and deposit calculator | M2 | S | — | eslieh | done |
 | BK-22 | `POST /bookings` | M2 | L | BK-10, BK-20, BK-21 | eslieh | done |
 | BK-23 | `GET /bookings/{id}` and `GET /me/bookings` | M2 | S | BK-20 | eslieh | done |
-| BK-24 | Expire unpaid holds | M2 | S | BK-20, BK-25 | | todo |
+| BK-24 | Expire unpaid holds | M2 | S | BK-20, BK-25 | eslieh | done |
 | BK-25 | Periodic jobs in the worker (`--beat`) | M2 | M | — | eslieh | done |
 | BK-26 | Assign staff to an unassigned booking | M2 | S | BK-22 | | todo |
 | BK-30 | Daraja client with payment routing (port from `payment-routing-test`) | M3 | M | — | eslieh | done |
@@ -141,8 +141,8 @@ A pure function: `(services with quantities, policies) -> { total, deposit | Non
 ### BK-24 · Expire unpaid holds
 - `booking.expire_holds`, run every minute by `--beat`: `pending_payment` bookings past `expires_at` move to `cancelled` with `cancelReason: "payment_expired"`.
 
-- [ ] Idempotent and safe to run on two workers at once (use `SELECT … FOR UPDATE SKIP LOCKED`).
-- [ ] A payment that succeeds after expiry still confirms the booking if the slot is free; otherwise it's flagged for a refund (log and `booking_events` entry for now).
+- [x] Idempotent and safe to run on two workers at once (`SELECT … FOR UPDATE SKIP LOCKED` on Postgres; `app/modules/booking/tasks.py`, `tests/test_expire_holds.py`).
+- Moved to BK-32: a payment that succeeds after expiry.
 
 ### BK-25 · Periodic jobs in the worker (`--beat`)
 - `python worker.py --beat` runs a small scheduler that enqueues registered periodic tasks (`@periodic("booking.expire_holds", every=60)`). It doesn't run them itself; normal workers do.
@@ -188,6 +188,7 @@ A pure function: `(services with quantities, policies) -> { total, deposit | Non
 - Look up by `CheckoutRequestID`. Ignore duplicates for already-settled payments (still answer 200).
 - Map result codes as in PLAN.md section 4.4. On success, store the receipt, set the payment to `succeeded`, move the booking to `confirmed` through `transition()` and enqueue the confirmation SMS.
 - Always answer Daraja with `{ "ResultCode": 0, "ResultDesc": "Accepted" }` once the callback is stored.
+- A payment that succeeds after the hold expired (from BK-24): confirm the booking if the slot is still free; otherwise flag it for a refund (log and a `booking_events` entry for now).
 
 - [ ] Replaying the same callback twice has no extra effect.
 - [ ] A wrong secret returns 404 and changes nothing.
