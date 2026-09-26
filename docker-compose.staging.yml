@@ -98,6 +98,19 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  beat:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment: *app-env
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    # Enqueues periodic tasks (e.g. releasing expired booking holds) for the
+    # workers to run. Exactly one replica: don't scale this service.
+    command: python worker.py --beat
+
 volumes:
   redis_data:
   rabbitmq_data:

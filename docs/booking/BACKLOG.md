@@ -18,7 +18,7 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | BK-22 | `POST /bookings` | M2 | L | BK-10, BK-20, BK-21 | eslieh | done |
 | BK-23 | `GET /bookings/{id}` and `GET /me/bookings` | M2 | S | BK-20 | eslieh | done |
 | BK-24 | Expire unpaid holds | M2 | S | BK-20, BK-25 | | todo |
-| BK-25 | Periodic jobs in the worker (`--beat`) | M2 | M | — | | todo |
+| BK-25 | Periodic jobs in the worker (`--beat`) | M2 | M | — | eslieh | done |
 | BK-26 | Assign staff to an unassigned booking | M2 | S | BK-22 | | todo |
 | BK-30 | Daraja client with payment routing (port from `payment-routing-test`) | M3 | M | — | eslieh | done |
 | BK-31 | Payments table and `POST /bookings/{id}/payments` | M3 | M | BK-22, BK-30 | | todo |
@@ -148,8 +148,8 @@ A pure function: `(services with quantities, policies) -> { total, deposit | Non
 - `python worker.py --beat` runs a small scheduler that enqueues registered periodic tasks (`@periodic("booking.expire_holds", every=60)`). It doesn't run them itself; normal workers do.
 - Add a `beat` service to the three compose files (one replica).
 
-- [ ] Documented in `app/workers/registry.py` next to `@task`.
-- [ ] Stopping `beat` doesn't stop other tasks from running.
+- [x] Documented in `app/workers/registry.py` next to `@task`; `beat` service in all three compose files.
+- [x] Stopping `beat` doesn't stop other tasks from running: beat only enqueues; workers run the jobs (`app/workers/beat.py`, `tests/test_beat.py`).
 
 ### BK-26 · Assign staff to an unassigned booking
 `PATCH /bookings/{id}/staff` `{ staffId }` for the owner or front desk (D4). The chosen staff member must perform every service on the booking and be free, checked with the availability engine under the same advisory lock as BK-22.

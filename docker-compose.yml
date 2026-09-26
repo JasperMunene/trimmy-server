@@ -102,6 +102,17 @@ services:
     # Give in-flight tasks time to finish on `docker compose stop` / redeploy.
     stop_grace_period: 40s
 
+  beat:
+    build: .
+    restart: unless-stopped
+    environment: *app-env
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    # Enqueues periodic tasks (e.g. releasing expired booking holds) for the
+    # workers to run. Exactly one replica: don't scale this service.
+    command: python worker.py --beat
+
   prometheus:
     image: prom/prometheus:latest
     restart: unless-stopped
