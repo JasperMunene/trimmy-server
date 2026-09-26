@@ -11,7 +11,7 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | BK-03 | Staff ↔ services mapping | M0 | M | BK-02 | eslieh | done |
 | BK-04 | Business timezone and booking settings | M0 | S | BK-01 | eslieh | done |
 | BK-05 | Run tests on Postgres in CI | M0 | S | — | | todo |
-| BK-10 | Availability engine (pure function) | M1 | L | BK-02, BK-03, BK-04 | | todo |
+| BK-10 | Availability engine (pure function) | M1 | L | BK-02, BK-03, BK-04 | eslieh | done |
 | BK-11 | Availability endpoints | M1 | M | BK-10 | | todo |
 | BK-20 | Booking tables, state machine, exclusion constraint | M2 | M | BK-02, BK-05 | | todo |
 | BK-21 | Price and deposit calculator | M2 | S | — | | todo |
@@ -89,10 +89,11 @@ The exclusion constraint (D9) can't be tested on SQLite.
 ### BK-10 · Availability engine (pure function)
 `app/modules/booking/availability.py`, as specified in PLAN.md section 4.3. No database access: callers pass in hours, staff, bookings, settings and `now`.
 
-- [ ] Covers: closed days, staff not working that weekday, a duration that doesn't fit before close, buffer on both sides of a booking, expired `pending_payment` bookings not blocking, the lead time on the current day, `max_days_ahead`, and "any staff" listing every free staff member.
-- [ ] Unassigned bookings use up capacity through the matching rule in PLAN.md section 4.3, step 5. Tests include two staff with different services, where one unassigned booking blocks a slot for a specific staff request.
-- [ ] `now` is always passed in; the function never calls the clock itself.
-- [ ] Runs in under 50 ms for 10 staff × 40 bookings in a day.
+- [x] Covers: closed days, staff not working that weekday, a duration that doesn't fit before close, buffer on both sides of a booking, expired `pending_payment` bookings not blocking, the lead time on the current day, `max_days_ahead`, and "any staff" listing every free staff member.
+- [x] Unassigned bookings use up capacity through the matching rule in PLAN.md section 4.3, step 5. Tests include two staff with different services, where one unassigned booking blocks a slot for a specific staff request.
+- [x] `now` is always passed in; the function never calls the clock itself.
+- [x] Runs in under 50 ms for 10 staff × 40 bookings in a day (`tests/test_availability.py`).
+- Known limit: unassigned bookings that overlap a new slot but not each other are still counted as needing separate people, so a slot is occasionally hidden (never overbooked).
 
 ### BK-11 · Availability endpoints
 - `GET /businesses/{id}/availability?date=&serviceIds=&staffId=` and `GET /businesses/{id}/availability/days?from=&days=&serviceIds=&staffId=` (PLAN.md section 5).
