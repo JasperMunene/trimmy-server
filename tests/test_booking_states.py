@@ -1,4 +1,3 @@
-import os
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -20,9 +19,6 @@ ALLOWED = {
     ("in_progress", "completed"),
 }
 NBO = ZoneInfo("Africa/Nairobi")
-on_postgres = pytest.mark.skipif(
-    not os.environ.get("DATABASE_URL", "").startswith("postgresql"), reason="needs Postgres (BK-05)"
-)
 
 
 def make_booking(**fields) -> Booking:
@@ -167,7 +163,7 @@ async def test_availability_skips_booked_and_honours_expired_holds(client, db_se
 # ─── Postgres exclusion constraint (runs once BK-05 adds Postgres to CI) ─
 
 
-@on_postgres
+@pytest.mark.postgres_only
 @pytest.mark.asyncio
 async def test_database_rejects_overlapping_assigned_bookings(db_session, published):
     business, staff = published

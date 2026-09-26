@@ -10,7 +10,7 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | BK-02 | Staff identity: `Staff.id` as `staffId`, working days on `Staff` | M0 | M | BK-01 | eslieh | done |
 | BK-03 | Staff ↔ services mapping | M0 | M | BK-02 | eslieh | done |
 | BK-04 | Business timezone and booking settings | M0 | S | BK-01 | eslieh | done |
-| BK-05 | Run tests on Postgres in CI | M0 | S | — | | todo |
+| BK-05 | Run tests on Postgres in CI | M0 | S | — | eslieh | in review |
 | BK-10 | Availability engine (pure function) | M1 | L | BK-02, BK-03, BK-04 | eslieh | done |
 | BK-11 | Availability endpoints | M1 | M | BK-10 | eslieh | done |
 | BK-20 | Booking tables, state machine, exclusion constraint | M2 | M | BK-02, BK-05 | eslieh | done |
@@ -82,7 +82,9 @@ The exclusion constraint (D9) can't be tested on SQLite.
 - Add a `postgres:16` service to `.github/workflows/test.yml` and run the suite against it (keep SQLite for fast local runs).
 - Add a pytest marker `postgres_only` for tests that need it, skipped on SQLite.
 
-- [ ] CI runs green on Postgres.
+Done so far: `test.yml` runs a `[sqlite, postgres]` matrix; `TEST_DATABASE_URL` switches the suite to Postgres (creating `btree_gist` first); `@pytest.mark.postgres_only` skips on SQLite; a guard refuses any test database host other than localhost/127.0.0.1/postgres, because every test drops all tables.
+
+- [ ] CI runs green on Postgres. Not verified yet: no local Postgres was used, and `test.yml` only runs on pushes and PRs to `sandbox`/`main`, so the first such PR is the check. Expect possible fixes for SQLite-vs-Postgres differences (timezones, JSON, ordering).
 
 ## M1: Availability
 
