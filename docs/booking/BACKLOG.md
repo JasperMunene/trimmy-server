@@ -7,7 +7,7 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | ID | Task | Milestone | Size | Depends on | Owner | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | BK-01 | Confirm decisions D1–D9 | M0 | S | — | | in progress |
-| BK-02 | Staff identity: `Staff.id` as `staffId`, working days on `Staff` | M0 | M | BK-01 | | todo |
+| BK-02 | Staff identity: `Staff.id` as `staffId`, working days on `Staff` | M0 | M | BK-01 | eslieh | done |
 | BK-03 | Staff ↔ services mapping | M0 | M | BK-02 | | todo |
 | BK-04 | Business timezone and booking settings | M0 | S | BK-01 | | todo |
 | BK-05 | Run tests on Postgres in CI | M0 | S | — | | todo |
@@ -48,7 +48,8 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 Walk through PLAN.md section 3 and record each outcome there.
 
 - [x] D1 payment routing, D2 sandbox first, D4 unassigned "any available", D5 15-minute grid, D6 10-minute hold (decided 2026-09-26).
-- [ ] D3, D7, D8 and D9 (technical proposals) accepted or changed by the engineers picking up M0/M2.
+- [x] D3 implemented in BK-02.
+- [ ] D7, D8 and D9 (technical proposals) accepted or changed by the engineers picking up M0/M2.
 
 ### BK-02 · Staff identity: `Staff.id` as `staffId`, working days on `Staff`
 Today one person is a `TeamInvitation` (roster, `workingDays`, `commissionPercent`) and a `Staff` row (created on accept). Availability and bookings need one id.
@@ -57,8 +58,8 @@ Today one person is a `TeamInvitation` (roster, `workingDays`, `commissionPercen
 - On accept, copy the invitation's working days and commission to the new `Staff` row. Team-member `PATCH` updates `Staff` once the member has accepted.
 - Add `staffId` (null while pending) to the team-member responses.
 
-- [ ] A solo owner, an accepted member and the business profile's `staff[]` all expose the same `staffId`.
-- [ ] Migration moves existing data and downgrades cleanly.
+- [x] A solo owner, an accepted member and the business profile's `staff[]` all expose the same `staffId` (`tests/test_staff_identity.py`).
+- [x] Migration `006` moves existing data and downgrades cleanly.
 
 ### BK-03 · Staff ↔ services mapping
 - New `staff_services` table. No rows for a staff member means they perform every service.
