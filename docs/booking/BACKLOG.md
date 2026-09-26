@@ -12,7 +12,7 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | BK-04 | Business timezone and booking settings | M0 | S | BK-01 | eslieh | done |
 | BK-05 | Run tests on Postgres in CI | M0 | S | — | | todo |
 | BK-10 | Availability engine (pure function) | M1 | L | BK-02, BK-03, BK-04 | eslieh | done |
-| BK-11 | Availability endpoints | M1 | M | BK-10 | | todo |
+| BK-11 | Availability endpoints | M1 | M | BK-10 | eslieh | done |
 | BK-20 | Booking tables, state machine, exclusion constraint | M2 | M | BK-02, BK-05 | | todo |
 | BK-21 | Price and deposit calculator | M2 | S | — | | todo |
 | BK-22 | `POST /bookings` | M2 | L | BK-10, BK-20, BK-21 | | todo |
@@ -99,8 +99,8 @@ The exclusion constraint (D9) can't be tested on SQLite.
 - `GET /businesses/{id}/availability?date=&serviceIds=&staffId=` and `GET /businesses/{id}/availability/days?from=&days=&serviceIds=&staffId=` (PLAN.md section 5).
 - Only published businesses; `serviceIds` must belong to the business; a given `staffId` must perform every chosen service.
 
-- [ ] Typed `response_model`s, and errors in `{ error, message }`.
-- [ ] One query per request for the day's bookings, not one per staff member.
+- [x] Typed `response_model`s, and errors in `{ error, message }` (`tests/test_availability_api.py`).
+- [ ] One query per request for the day's bookings, not one per staff member. The hook is `AvailabilityService._existing_bookings`, which returns no bookings until BK-20 adds the table.
 
 ## M2: Bookings without a deposit
 

@@ -15,6 +15,7 @@ from app.core.rate_limit import limiter
 from app.core.storage import LocalStorage, get_storage
 from app.workers.broker import publisher
 from app.modules.auth.router import router as auth_router
+from app.modules.booking.router import availability_router
 from app.modules.business.router import discovery_router
 from app.modules.business.router import options_router
 from app.modules.payments.router import router as payments_router
@@ -76,6 +77,8 @@ app.include_router(auth_router, prefix=settings.API_V1_STR)
 # discovery_router must precede business_router: its GET /businesses/search
 # would otherwise match the authed GET /businesses/{business_id} route.
 app.include_router(discovery_router, prefix=settings.API_V1_STR)
+# Public like discovery, and before business_router for the same reason.
+app.include_router(availability_router, prefix=settings.API_V1_STR)
 app.include_router(business_router, prefix=settings.API_V1_STR)
 app.include_router(team_router, prefix=settings.API_V1_STR)
 app.include_router(options_router, prefix=settings.API_V1_STR)
