@@ -20,12 +20,12 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | BK-24 | Expire unpaid holds | M2 | S | BK-20, BK-25 | | todo |
 | BK-25 | Periodic jobs in the worker (`--beat`) | M2 | M | — | | todo |
 | BK-26 | Assign staff to an unassigned booking | M2 | S | BK-22 | | todo |
-| BK-30 | Daraja client with payment routing (port from `payment-routing-test`) | M3 | M | — | | todo |
+| BK-30 | Daraja client with payment routing (port from `payment-routing-test`) | M3 | M | — | eslieh | done |
 | BK-31 | Payments table and `POST /bookings/{id}/payments` | M3 | M | BK-22, BK-30 | | todo |
 | BK-32 | M-Pesa callback endpoint | M3 | M | BK-31 | | todo |
 | BK-33 | Reconcile stuck payments | M3 | S | BK-25, BK-31 | | todo |
 | BK-34 | Deposit and receipt on the booking, per-business deposit totals | M3 | S | BK-32 | | todo |
-| BK-35 | Prove payment routing in production | M3 | S | BK-30, BK-51 | | todo |
+| BK-35 | Prove payment routing in production | M3 | S | BK-30 | eslieh | in progress |
 | BK-36 | Payment destinations fit Daraja limits; merge bank lists | M3 | S | — | | todo |
 | BK-40 | Booking confirmation SMS | M4 | S | BK-22 | | todo |
 | BK-41 | Push notification tokens (Expo) | M4 | M | — | | todo |
@@ -159,7 +159,7 @@ A pure function: `(services with quantities, policies) -> { total, deposit | Non
 | `mpesa_paybill` | `CustomerPayBillOnline` | paybill number | the business's paybill account |
 | `bank_account` | `CustomerPayBillOnline` | bank's paybill shortcode | bank account number |
 
-- Settings: `MPESA_ENV` (`sandbox` | `production`), `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_SHORT_CODE`, `MPESA_PASSKEY` (new), `MPESA_CALLBACK_BASE_URL`, `MPESA_CALLBACK_SECRET`. Add them to `.env.example`, compose and the deploy workflows. `INITIATOR_NAME` and `SECURITY_CREDENTIAL` from the prototype's `.env` are only needed later, for reversals.
+- Settings: `MPESA_ENV` (`sandbox` | `production`), `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_SHORTCODE`, `MPESA_PASSKEY`, `MPESA_CALLBACK_URL` (public URL of the callback route), `MPESA_CALLBACK_SECRET` (appended to it as the last path segment). Add them to `.env.example`, compose and the deploy workflows. `INITIATOR_NAME` and `SECURITY_CREDENTIAL` from the prototype's `.env` are only needed later, for reversals.
 - Cache the OAuth token until shortly before it expires (the prototype fetches one per request). Normalise phones with `app/core/phone_utils.py` to `2547…`.
 
 - [ ] Unit tests against recorded sandbox responses (no network in CI).
@@ -173,6 +173,8 @@ A pure function: `(services with quantities, policies) -> { total, deposit | Non
 
 ### BK-32 · M-Pesa callback endpoint
 `POST /payments/mpesa/callback/{secret}`: public, but the secret in the path must match.
+
+*Started in BK-30:* the route exists in `app/modules/payments/router.py` and verifies the secret, parses the payload and logs it. What's left is everything below that touches the database.
 
 - Look up by `CheckoutRequestID`. Ignore duplicates for already-settled payments (still answer 200).
 - Map result codes as in PLAN.md section 4.4. On success, store the receipt, set the payment to `succeeded`, move the booking to `confirmed` through `transition()` and enqueue the confirmation SMS.
@@ -195,7 +197,8 @@ With payment routing (D1) the money is already in the business's account, so the
 ### BK-35 · Prove payment routing in production
 The sandbox doesn't validate `PartyB`, so routing to a till or paybill Trimmy doesn't own is unproven. As soon as production credentials exist (BK-51), push KES 1 to one real third-party till, one paybill and one bank.
 
-- [ ] Each of the three succeeds, or the failure (result code and description) is recorded here and D1 is revisited with the aggregator fallback.
+- [x] Paybill: a production STK push routed to a third-party paybill succeeded (2026-09-26, `scripts/mpesa_stk.py`).
+- [ ] Till (`CustomerBuyGoodsOnline`) and bank (bank paybill + account) each succeed, or the failure (result code and description) is recorded here and D1 is revisited with the aggregator fallback.
 - [ ] Ask Safaricom during go-live whether this routing needs special approval on Trimmy's shortcode.
 
 ### BK-36 · Payment destinations fit Daraja limits; merge bank lists

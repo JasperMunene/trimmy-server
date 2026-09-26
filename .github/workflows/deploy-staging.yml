@@ -69,6 +69,15 @@ jobs:
             R2_PUBLIC_URL=${{ vars.R2_PUBLIC_URL }}
             R2_ACCESS_KEY_ID=${{ secrets.R2_ACCESS_KEY_ID }}
             R2_SECRET_ACCESS_KEY=${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+            # M-Pesa (Daraja STK push with payment routing)
+            MPESA_ENV=${{ vars.MPESA_ENV }}
+            MPESA_SHORTCODE=${{ vars.MPESA_SHORTCODE }}
+            MPESA_CALLBACK_URL=${{ vars.MPESA_CALLBACK_URL }}
+            MPESA_CONSUMER_KEY=${{ secrets.MPESA_CONSUMER_KEY }}
+            MPESA_CONSUMER_SECRET=${{ secrets.MPESA_CONSUMER_SECRET }}
+            MPESA_PASSKEY=${{ secrets.MPESA_PASSKEY }}
+            MPESA_CALLBACK_SECRET=${{ secrets.MPESA_CALLBACK_SECRET }}
             EOF
 
             echo "=== Running migrations ==="

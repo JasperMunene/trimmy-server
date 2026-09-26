@@ -39,6 +39,18 @@ class Settings(BaseSettings):
     RESEND_FROM_EMAIL: str = "noreply@yourdomain.com"
     CLIENT_URL: str = "http://localhost:8081"
 
+    # M-Pesa Daraja (STK push). Trimmy's own app and shortcode sign every push;
+    # the money is routed to each business's payment destination (PartyB).
+    MPESA_ENV: str = "sandbox"  # sandbox | production
+    MPESA_CONSUMER_KEY: str = ""
+    MPESA_CONSUMER_SECRET: str = ""
+    MPESA_SHORTCODE: str = ""
+    MPESA_PASSKEY: str = ""
+    # Public https URL of POST /payments/mpesa/callback; the secret is appended as
+    # the last path segment so only Daraja (who got the full URL) can call it.
+    MPESA_CALLBACK_URL: str = ""
+    MPESA_CALLBACK_SECRET: str = ""
+
     # SMS (HostPinnacle / Intacom gateway) for phone OTP delivery.
     SMS_API_KEY: str = ""
     SMS_USER_ID: str = ""
