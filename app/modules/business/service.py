@@ -201,6 +201,7 @@ def team_member_response(inv: TeamInvitation) -> TeamMemberResponse:
     return TeamMemberResponse(
         invitationId=inv.id,
         businessId=inv.business_id,
+        staffId=inv.staff_id,
         name=inv.name,
         email=inv.email,
         phone=inv.phone,
@@ -917,13 +918,19 @@ class BusinessService:
         business = await self._get_owned_business(business_id, user_id)
         invitation = await self._get_member(business, invitation_id)
 
+        # Once accepted, Staff is the source of truth; keep the roster record in step.
+        staff = await self.db.get(Staff, invitation.staff_id) if invitation.staff_id else None
         fields = data.model_fields_set
         if "commission_percent" in fields:
             if data.commission_percent is None:
                 raise _validation_error("commissionPercent must be between 0 and 100")
             invitation.commission_percent = data.commission_percent
+            if staff:
+                staff.commission_percent = data.commission_percent
         if "working_days" in fields:
             invitation.working_days = self._normalise_days(data.working_days)
+            if staff:
+                staff.working_days = invitation.working_days
 
         await self.db.commit()
         await self.db.refresh(invitation)
@@ -934,7 +941,12 @@ class BusinessService:
         business = await self._get_owned_business(business_id, user_id)
         invitation = await self._get_member(business, invitation_id)
 
-        if invitation.status == InvitationStatus.ACCEPTED and invitation.user_id:
+        if invitation.staff_id:
+            await self.db.execute(
+                delete(Staff).where(Staff.business_id == business.id, Staff.id == invitation.staff_id)
+            )
+        elif invitation.status == InvitationStatus.ACCEPTED and invitation.user_id:
+            # Accepted before invitations were linked to Staff (pre-006 rows the backfill missed).
             await self.db.execute(
                 delete(Staff).where(Staff.business_id == business.id, Staff.user_id == invitation.user_id)
             )
@@ -1106,28 +1118,35 @@ class BusinessService:
             invitation.status = InvitationStatus.ACCEPTED
             invitation.user_id = user_id
 
-            existing_staff = await self.db.execute(
-                select(Staff).where(
-                    Staff.business_id == invitation.business_id,
-                    Staff.user_id == uuid_pkg.UUID(str(user_id)),
+            staff = (
+                await self.db.execute(
+                    select(Staff).where(
+                        Staff.business_id == invitation.business_id,
+                        Staff.user_id == uuid_pkg.UUID(str(user_id)),
+                    )
                 )
-            )
-            if not existing_staff.scalar_one_or_none():
+            ).scalar_one_or_none()
+            if not staff:
                 member_name = (
                     " ".join(p for p in (user.first_name, user.last_name) if p)
+                    or invitation.name
                     or user.email
                     or "Team member"
                 )
-                self.db.add(
-                    Staff(
-                        business_id=invitation.business_id,
-                        user_id=uuid_pkg.UUID(str(user_id)),
-                        name=member_name,
-                        role=invitation.role,
-                        specialties=[],
-                        portfolio=[],
-                    )
+                staff = Staff(
+                    id=uuid_pkg.uuid4(),
+                    business_id=invitation.business_id,
+                    user_id=uuid_pkg.UUID(str(user_id)),
+                    name=member_name,
+                    role=invitation.role,
+                    specialties=[],
+                    portfolio=[],
                 )
+                self.db.add(staff)
+            # Staff becomes this member's bookable identity (docs/booking/PLAN.md, D3).
+            staff.working_days = invitation.working_days
+            staff.commission_percent = invitation.commission_percent
+            invitation.staff_id = staff.id
         else:
             invitation.status = InvitationStatus.DECLINED
         await self.db.commit()
@@ -1300,6 +1319,7 @@ class BusinessService:
                 staffId=st.id,
                 name=st.name,
                 role=st.role,
+                workingDays=st.working_days,
                 rating=st.rating,
                 avatarUrl=st.avatar_url,
                 bio=st.bio or "",

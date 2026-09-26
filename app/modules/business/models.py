@@ -237,6 +237,10 @@ class TeamInvitation(Base):
     working_days: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     invited_by: Mapped[uuid_pkg.UUID] = mapped_column(UUID, nullable=False)
     user_id: Mapped[Optional[uuid_pkg.UUID]] = mapped_column(UUID, nullable=True)
+    # Set when the invite is accepted: the Staff row that is this member's bookable identity.
+    staff_id: Mapped[Optional[uuid_pkg.UUID]] = mapped_column(
+        UUID, ForeignKey("staff.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     sent_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -259,6 +263,10 @@ class Staff(Base):
     bio: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     specialties: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     portfolio: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    # Lowercase weekday names this person works, or null for "whenever the business is open".
+    # Copied from the invitation on accept; Staff is the source of truth from then on.
+    working_days: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    commission_percent: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

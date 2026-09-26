@@ -336,6 +336,8 @@ class TeamMemberResponse(BaseModel):
 
     invitation_id: uuid_pkg.UUID = Field(alias="invitationId")
     business_id: uuid_pkg.UUID = Field(alias="businessId")
+    # The bookable identity (profile staff[].staffId, bookings). Null until the invite is accepted.
+    staff_id: Optional[uuid_pkg.UUID] = Field(None, alias="staffId")
     name: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
@@ -451,6 +453,8 @@ class StaffMemberResponse(BaseModel):
     staff_id: uuid_pkg.UUID = Field(alias="staffId")
     name: str
     role: str
+    # Null = works whenever the business is open.
+    working_days: Optional[List[str]] = Field(None, alias="workingDays")
     rating: float
     avatar_url: Optional[str] = Field(None, alias="avatarUrl")
     bio: Optional[str] = None

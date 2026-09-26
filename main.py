@@ -17,6 +17,7 @@ from app.workers.broker import publisher
 from app.modules.auth.router import router as auth_router
 from app.modules.business.router import discovery_router
 from app.modules.business.router import options_router
+from app.modules.payments.router import router as payments_router
 from app.modules.business.router import router as business_router
 from app.modules.business.router import team_router
 
@@ -78,6 +79,7 @@ app.include_router(discovery_router, prefix=settings.API_V1_STR)
 app.include_router(business_router, prefix=settings.API_V1_STR)
 app.include_router(team_router, prefix=settings.API_V1_STR)
 app.include_router(options_router, prefix=settings.API_V1_STR)
+app.include_router(payments_router, prefix=settings.API_V1_STR)
 
 if isinstance(get_storage(), LocalStorage):
     # Dev only: serve locally stored uploads. With R2, files are served by R2 itself.
