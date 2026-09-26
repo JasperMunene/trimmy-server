@@ -84,6 +84,7 @@ class GetBusinessResponse(BaseModel):
     policies: Optional["PoliciesResponse"] = None
     payment_destination: Optional["PaymentDestinationResponse"] = Field(None, alias="paymentDestination")
     team_mode: Optional[str] = Field(None, alias="teamMode")
+    booking_settings: Optional["BookingSettingsResponse"] = Field(None, alias="bookingSettings")
     status: str
     onboarding_step: Optional[str] = Field(None, alias="onboardingStep")
 
@@ -530,6 +531,35 @@ class BusinessProfileResponse(BaseModel):
     services: List[ProfileServiceResponse]
     staff: List[StaffMemberResponse]
     reviews: List[ReviewResponse]
+
+    model_config = {"populate_by_name": True}
+
+
+# ─── Booking settings ────────────────────────────────────────
+
+class UpdateBookingSettingsRequest(BaseModel):
+    """Only the fields sent are changed."""
+
+    timezone: Optional[str] = Field(None, examples=["Africa/Nairobi"])
+    # Customers see start times on this grid. Must divide an hour evenly.
+    slot_interval_minutes: Optional[int] = Field(None, alias="slotIntervalMinutes", ge=5, le=60)
+    # Kept free after each booking (clean-up, turnover).
+    buffer_minutes: Optional[int] = Field(None, alias="bufferMinutes", ge=0, le=120)
+    # How soon from now the earliest bookable slot is.
+    min_lead_minutes: Optional[int] = Field(None, alias="minLeadMinutes", ge=0, le=7 * 24 * 60)
+    # How far ahead customers can book.
+    max_days_ahead: Optional[int] = Field(None, alias="maxDaysAhead", ge=1, le=365)
+
+    model_config = {"populate_by_name": True}
+
+
+class BookingSettingsResponse(BaseModel):
+    business_id: uuid_pkg.UUID = Field(alias="businessId")
+    timezone: str
+    slot_interval_minutes: int = Field(alias="slotIntervalMinutes")
+    buffer_minutes: int = Field(alias="bufferMinutes")
+    min_lead_minutes: int = Field(alias="minLeadMinutes")
+    max_days_ahead: int = Field(alias="maxDaysAhead")
 
     model_config = {"populate_by_name": True}
 

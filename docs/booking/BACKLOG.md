@@ -9,7 +9,7 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | BK-01 | Confirm decisions D1–D9 | M0 | S | — | | in progress |
 | BK-02 | Staff identity: `Staff.id` as `staffId`, working days on `Staff` | M0 | M | BK-01 | eslieh | done |
 | BK-03 | Staff ↔ services mapping | M0 | M | BK-02 | eslieh | done |
-| BK-04 | Business timezone and booking settings | M0 | S | BK-01 | | todo |
+| BK-04 | Business timezone and booking settings | M0 | S | BK-01 | eslieh | done |
 | BK-05 | Run tests on Postgres in CI | M0 | S | — | | todo |
 | BK-10 | Availability engine (pure function) | M1 | L | BK-02, BK-03, BK-04 | | todo |
 | BK-11 | Availability endpoints | M1 | M | BK-10 | | todo |
@@ -49,7 +49,8 @@ Walk through PLAN.md section 3 and record each outcome there.
 
 - [x] D1 payment routing, D2 sandbox first, D4 unassigned "any available", D5 15-minute grid, D6 10-minute hold (decided 2026-09-26).
 - [x] D3 implemented in BK-02.
-- [ ] D7, D8 and D9 (technical proposals) accepted or changed by the engineers picking up M0/M2.
+- [x] D8 implemented in BK-04.
+- [ ] D7 and D9 (technical proposals) accepted or changed by the engineers picking up M2.
 
 ### BK-02 · Staff identity: `Staff.id` as `staffId`, working days on `Staff`
 Today one person is a `TeamInvitation` (roster, `workingDays`, `commissionPercent`) and a `Staff` row (created on accept). Availability and bookings need one id.
@@ -73,7 +74,7 @@ Today one person is a `TeamInvitation` (roster, `workingDays`, `commissionPercen
 - Columns on `businesses`: `timezone` (default `Africa/Nairobi`, validated against the IANA zone list), `slot_interval_minutes` (15), `buffer_minutes` (0), `min_lead_minutes` (30), `max_days_ahead` (30).
 - `PATCH /businesses/{id}/booking-settings`; the values appear in `GET /businesses/{id}`.
 
-- [ ] Invalid values (for example an interval that isn't 5–60 or doesn't divide 60) return 400 `validation_error`.
+- [x] Invalid values (for example an interval that isn't 5–60 or doesn't divide 60) are rejected (`tests/test_booking_settings.py`).
 
 ### BK-05 · Run tests on Postgres in CI
 The exclusion constraint (D9) can't be tested on SQLite.

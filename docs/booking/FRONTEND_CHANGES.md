@@ -4,6 +4,37 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-26 · Booking settings (BK-04)
+
+**Why:** availability will use these rules, and all working hours and booking times are in the business's timezone. Fits the owner's "Working Hours & Holidays" screen (buffer time input).
+
+**New endpoint → `business-setup.json`**
+
+```json
+{
+  "id": "update-booking-settings",
+  "status": "live",
+  "screen": "Manage Business → Working Hours & Holidays (buffer time), booking rules",
+  "method": "PATCH",
+  "path": "/businesses/{businessId}/booking-settings",
+  "auth": "owner",
+  "description": "Only the fields sent change. timezone is an IANA name. slotIntervalMinutes is the grid customers pick start times on (5-60, must divide 60). bufferMinutes is kept free after each booking. minLeadMinutes is how soon the earliest slot is. maxDaysAhead is how far ahead customers can book.",
+  "request": { "slotIntervalMinutes": 15, "bufferMinutes": 10 },
+  "response": {
+    "businessId": "uuid", "timezone": "Africa/Nairobi", "slotIntervalMinutes": 15,
+    "bufferMinutes": 10, "minLeadMinutes": 30, "maxDaysAhead": 30
+  },
+  "errors": [
+    { "status": 400, "code": "validation_error", "message": "slotIntervalMinutes must divide 60 evenly (5, 10, 15, 20, 30 or 60)" },
+    { "status": 400, "code": "validation_error", "message": "Unknown timezone 'X'; use an IANA name like Africa/Nairobi" }
+  ]
+}
+```
+
+**Changed response → `business-setup.json#get-business-draft`**: gains `bookingSettings` (the same object as the response above). Defaults: Africa/Nairobi, 15-minute grid, no buffer, 30-minute lead time, 30 days ahead.
+
+---
+
 ## 2026-09-26 · Staff services (BK-03)
 
 **Why:** availability and booking need to know who can do which service. The owner's Member Detail screen ("services they perform, multi-select") can now save that.

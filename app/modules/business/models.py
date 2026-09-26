@@ -64,6 +64,13 @@ class Business(Base):
     onboarding_step: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     team_mode: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Booking settings (docs/booking/PLAN.md, D5 and D8). Working hours are in this timezone.
+    timezone: Mapped[str] = mapped_column(Text, nullable=False, default="Africa/Nairobi")
+    slot_interval_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=15)
+    buffer_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    min_lead_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
+    max_days_ahead: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
     )

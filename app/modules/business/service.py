@@ -33,6 +33,7 @@ from app.modules.business.models import (
 )
 from app.modules.business.schemas import (
     AddTeamMemberRequest,
+    BookingSettingsResponse,
     BusinessProfileResponse,
     BusinessSummaryResponse,
     CancellationPolicyResponse,
@@ -72,6 +73,7 @@ from app.modules.business.schemas import (
     StaffServicesResponse,
     TeamMemberResponse,
     TeamModeResponse,
+    UpdateBookingSettingsRequest,
     UpdateBusinessResponse,
     UpdateServiceRequest,
     UpdateTeamMemberRequest,
@@ -198,6 +200,17 @@ def payment_destination_response(business: Business, pd: PaymentDestination) -> 
 
 def photo_response(p: BusinessPhoto) -> PhotoResponse:
     return PhotoResponse(photoId=p.id, businessId=p.business_id, url=p.url, isCover=p.is_cover, createdAt=p.created_at)
+
+
+def booking_settings_response(b: Business) -> BookingSettingsResponse:
+    return BookingSettingsResponse(
+        businessId=b.id,
+        timezone=b.timezone,
+        slotIntervalMinutes=b.slot_interval_minutes,
+        bufferMinutes=b.buffer_minutes,
+        minLeadMinutes=b.min_lead_minutes,
+        maxDaysAhead=b.max_days_ahead,
+    )
 
 
 def team_member_response(inv: TeamInvitation) -> TeamMemberResponse:
@@ -387,6 +400,7 @@ class BusinessService:
                 else None
             ),
             teamMode=business.team_mode,
+            bookingSettings=booking_settings_response(business),
             status=business.status,
             onboardingStep=business.onboarding_step,
         )
@@ -889,6 +903,37 @@ class BusinessService:
         await self.db.commit()
         await self.db.refresh(invitation)
         return invitation
+
+    # ─── booking settings ────────────────────────────────────
+
+    async def update_booking_settings(
+        self, business_id: str, user_id: str, data: UpdateBookingSettingsRequest
+    ) -> BookingSettingsResponse:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        business = await self._get_owned_business(business_id, user_id)
+        fields = data.model_fields_set
+        for name in fields:
+            if getattr(data, name) is None:
+                raise _validation_error(f"{name} cannot be null")
+
+        if "timezone" in fields:
+            try:
+                ZoneInfo(data.timezone)
+            except (ZoneInfoNotFoundError, ValueError):
+                raise _validation_error(f"Unknown timezone {data.timezone!r}; use an IANA name like Africa/Nairobi")
+            business.timezone = data.timezone
+        if "slot_interval_minutes" in fields:
+            if 60 % data.slot_interval_minutes:
+                raise _validation_error("slotIntervalMinutes must divide 60 evenly (5, 10, 15, 20, 30 or 60)")
+            business.slot_interval_minutes = data.slot_interval_minutes
+        for name in ("buffer_minutes", "min_lead_minutes", "max_days_ahead"):
+            if name in fields:
+                setattr(business, name, getattr(data, name))
+
+        await self.db.commit()
+        await self.db.refresh(business)
+        return booking_settings_response(business)
 
     # ─── staff services ──────────────────────────────────────
 
