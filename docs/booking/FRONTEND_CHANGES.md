@@ -4,6 +4,48 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-27 · Read bookings (BK-23)
+
+**Why:** bookings now live on the server, so My Appointments and Appointment Detail survive a reinstall and work across devices. Replaces `useBookingsStore` as the source of truth.
+
+**New endpoints → `booking.json`**
+
+```json
+{
+  "id": "get-booking",
+  "status": "live",
+  "screen": "Appointment Detail; STK Push Pending (poll while paying, from BK-31)",
+  "method": "GET",
+  "path": "/bookings/{bookingId}",
+  "auth": "the customer who booked, or the business's owner or staff",
+  "description": "The same Booking shape create-booking returns, plus depositPayment: null until a deposit payment is started (BK-31), then { paymentId, status: pending | succeeded | failed | timeout, failureReason }. An unpaid booking whose hold ran out shows status cancelled with cancelReason payment_expired.",
+  "response": "Booking",
+  "errors": [{ "status": 404, "code": "not_found", "message": "No booking found for this id" }]
+},
+{
+  "id": "list-my-bookings",
+  "status": "live",
+  "screen": "My Appointments (Upcoming / Past / Cancelled)",
+  "method": "GET",
+  "path": "/me/bookings?filter=upcoming&limit=20&cursor={nextCursor}",
+  "auth": "any signed-in, verified user",
+  "description": "filter: upcoming = pending_payment, confirmed or in_progress and not yet over, soonest first. past = completed and no_show, plus confirmed bookings whose time has passed, newest first. cancelled = newest first. limit 1-50 (default 20). Pass nextCursor back as cursor for the next page; it's null on the last page.",
+  "response": { "bookings": ["Booking"], "nextCursor": "string | null" },
+  "errors": [
+    { "status": 400, "code": "validation_error", "message": "filter must be one of upcoming, past, cancelled" },
+    { "status": 400, "code": "validation_error", "message": "Invalid cursor" }
+  ]
+}
+```
+
+**App code to update**
+
+- My Appointments: one request per tab (`filter=upcoming|past|cancelled`), with infinite scroll on `nextCursor`. Drop the in-memory `useBookingsStore` as the source (a cache is fine).
+- Appointment Detail: load by `bookingId` with `GET /bookings/{bookingId}`.
+- `Booking` gains `depositPayment` (null for now).
+
+---
+
 ## 2026-09-27 · Create a booking (BK-22)
 
 **Why:** replaces the mocked `createBooking` (`USE_MOCK_BOOKING`). The server prices the booking itself, checks the slot is still free, and holds it while a deposit is paid.

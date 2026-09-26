@@ -15,7 +15,7 @@ from app.core.rate_limit import limiter
 from app.core.storage import LocalStorage, get_storage
 from app.workers.broker import publisher
 from app.modules.auth.router import router as auth_router
-from app.modules.booking.router import availability_router, bookings_router
+from app.modules.booking.router import availability_router, bookings_router, my_bookings_router
 from app.modules.business.router import discovery_router
 from app.modules.business.router import options_router
 from app.modules.payments.router import router as payments_router
@@ -84,6 +84,7 @@ app.include_router(team_router, prefix=settings.API_V1_STR)
 app.include_router(options_router, prefix=settings.API_V1_STR)
 app.include_router(payments_router, prefix=settings.API_V1_STR)
 app.include_router(bookings_router, prefix=settings.API_V1_STR)
+app.include_router(my_bookings_router, prefix=settings.API_V1_STR)
 
 if isinstance(get_storage(), LocalStorage):
     # Dev only: serve locally stored uploads. With R2, files are served by R2 itself.

@@ -1,4 +1,6 @@
 """Creating and reading bookings (BK-22, BK-23)."""
+import base64
+import binascii
 import logging
 import uuid as uuid_pkg
 from datetime import datetime, time, timedelta, timezone
@@ -6,7 +8,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
-from sqlalchemy import select, text
+from sqlalchemy import and_, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -14,16 +16,24 @@ from sqlalchemy.orm import selectinload
 from app.core.config import settings
 from app.modules.auth.models import User
 from app.modules.booking import availability
-from app.modules.booking.models import Booking, BookingLine, BookingStatus
+from app.modules.booking.models import ACTIVE_STATUSES, Booking, BookingLine, BookingStatus
 from app.modules.booking.pricing import DepositPolicy, Line, PricingError, quote_booking
-from app.modules.booking.schemas import BookingLineResponse, BookingResponse, CreateBookingRequest, Money
+from app.modules.booking.schemas import (
+    BookingLineResponse,
+    BookingResponse,
+    CreateBookingRequest,
+    ListBookingsResponse,
+    Money,
+)
 from app.modules.booking.service import AvailabilityService, _aware
 from app.modules.booking.states import record_created, transition
-from app.modules.business.models import BusinessPolicies, Staff
+from app.modules.business.models import Business, BusinessPolicies, Staff
 
 logger = logging.getLogger(__name__)
 
 ANY_STAFF_NAME = "Any available"
+FILTERS = ("upcoming", "past", "cancelled")
+PAGE_SIZE_MAX = 50
 
 
 def _error(status: int, code: str, message: str) -> HTTPException:
@@ -47,7 +57,12 @@ def deposit_policy(p: Optional[BusinessPolicies]) -> Optional[DepositPolicy]:
     )
 
 
-async def expire_holds(db: AsyncSession, now: datetime, business_id: Optional[uuid_pkg.UUID] = None) -> int:
+async def expire_holds(
+    db: AsyncSession,
+    now: datetime,
+    business_id: Optional[uuid_pkg.UUID] = None,
+    customer_id: Optional[uuid_pkg.UUID] = None,
+) -> int:
     """Cancel pending_payment bookings whose hold has run out (D6). The caller commits.
 
     Used by the periodic sweep (BK-24) and, for one business, right before a new
@@ -60,6 +75,8 @@ async def expire_holds(db: AsyncSession, now: datetime, business_id: Optional[uu
     ).options(selectinload(Booking.events))
     if business_id is not None:
         query = query.where(Booking.business_id == business_id)
+    if customer_id is not None:
+        query = query.where(Booking.customer_id == customer_id)
     if db.bind.dialect.name == "postgresql":
         query = query.with_for_update(skip_locked=True)
     expired = (await db.execute(query)).scalars().all()
@@ -78,6 +95,20 @@ async def _lock_business_day(db: AsyncSession, business_id: uuid_pkg.UUID, day) 
         await db.execute(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": f"booking:{business_id}:{day}"}
         )
+
+
+def _encode_cursor(booking: Booking) -> str:
+    raw = f"{_aware(booking.starts_at).isoformat()}|{booking.id}"
+    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+
+def _decode_cursor(cursor: str) -> tuple[datetime, uuid_pkg.UUID]:
+    try:
+        raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)).decode()
+        when, booking_id = raw.split("|")
+        return datetime.fromisoformat(when).astimezone(timezone.utc), uuid_pkg.UUID(booking_id)
+    except (ValueError, binascii.Error, UnicodeDecodeError):
+        raise _error(400, "validation_error", "Invalid cursor")
 
 
 class BookingsService:
@@ -191,19 +222,99 @@ class BookingsService:
 
         return await self.get_response(booking.id)
 
+    # ─── reading ─────────────────────────────────────────────
+
+    async def get(self, user: User, booking_id: str) -> BookingResponse:
+        """A booking the user took, or one at a business they own or work at; otherwise 404."""
+        not_found = _error(404, "not_found", "No booking found for this id")
+        try:
+            bid = uuid_pkg.UUID(str(booking_id))
+        except ValueError:
+            raise not_found
+        booking = await self.db.get(Booking, bid)
+        if booking is None or not await self._can_view(user, booking):
+            raise not_found
+        # Housekeeping so an expired hold never shows as still pending (the sweep, BK-24, does the rest).
+        if await expire_holds(self.db, self.now, business_id=booking.business_id):
+            await self.db.commit()
+        return await self.get_response(bid)
+
+    async def list_mine(self, user: User, filter: str, cursor: Optional[str], limit: int) -> ListBookingsResponse:
+        if filter not in FILTERS:
+            raise _error(400, "validation_error", f"filter must be one of {', '.join(FILTERS)}")
+        if not 1 <= limit <= PAGE_SIZE_MAX:
+            raise _error(400, "validation_error", f"limit must be between 1 and {PAGE_SIZE_MAX}")
+        if await expire_holds(self.db, self.now, customer_id=user.id):
+            await self.db.commit()
+
+        query = select(Booking).where(Booking.customer_id == user.id).options(selectinload(Booking.lines))
+        if filter == "upcoming":
+            # Soonest first; in_progress stays "upcoming" until it ends.
+            query = query.where(Booking.status.in_(ACTIVE_STATUSES), Booking.ends_at > self.now)
+            ascending = True
+        elif filter == "past":
+            query = query.where(
+                or_(
+                    Booking.status.in_((BookingStatus.COMPLETED, BookingStatus.NO_SHOW)),
+                    and_(Booking.status.in_(ACTIVE_STATUSES), Booking.ends_at <= self.now),
+                )
+            )
+            ascending = False
+        else:
+            query = query.where(Booking.status == BookingStatus.CANCELLED)
+            ascending = False
+
+        if cursor:
+            when, last_id = _decode_cursor(cursor)
+            if ascending:
+                query = query.where(or_(Booking.starts_at > when, and_(Booking.starts_at == when, Booking.id > last_id)))
+            else:
+                query = query.where(or_(Booking.starts_at < when, and_(Booking.starts_at == when, Booking.id < last_id)))
+        order = (Booking.starts_at.asc(), Booking.id.asc()) if ascending else (Booking.starts_at.desc(), Booking.id.desc())
+        rows = (await self.db.execute(query.order_by(*order).limit(limit + 1))).scalars().all()
+
+        page, more = rows[:limit], len(rows) > limit
+        return ListBookingsResponse(
+            bookings=await self.to_responses(page),
+            nextCursor=_encode_cursor(page[-1]) if more else None,
+        )
+
+    async def _can_view(self, user: User, booking: Booking) -> bool:
+        if booking.customer_id == user.id:
+            return True
+        business = await self.db.get(Business, booking.business_id)
+        if business and business.owner_id == user.id:
+            return True
+        works_there = await self.db.execute(
+            select(Staff.id).where(Staff.business_id == booking.business_id, Staff.user_id == user.id)
+        )
+        return works_there.first() is not None
+
+    # ─── responses ───────────────────────────────────────────
+
     async def get_response(self, booking_id: uuid_pkg.UUID) -> BookingResponse:
         booking = (
             await self.db.execute(
                 select(Booking).where(Booking.id == booking_id).options(selectinload(Booking.lines))
             )
         ).scalar_one()
-        return await self.to_response(booking)
+        return (await self.to_responses([booking]))[0]
 
-    async def to_response(self, booking: Booking) -> BookingResponse:
-        from app.modules.business.models import Business
+    async def to_responses(self, bookings: list[Booking]) -> list[BookingResponse]:
+        """Build responses with one query each for the businesses and staff involved."""
+        business_ids = {b.business_id for b in bookings}
+        staff_ids = {b.staff_id for b in bookings if b.staff_id}
+        businesses = {
+            b.id: b for b in (await self.db.execute(select(Business).where(Business.id.in_(business_ids)))).scalars()
+        } if business_ids else {}
+        staff = {
+            s.id: s for s in (await self.db.execute(select(Staff).where(Staff.id.in_(staff_ids)))).scalars()
+        } if staff_ids else {}
+        return [self._response(b, businesses.get(b.business_id), staff.get(b.staff_id)) for b in bookings]
 
-        business = await self.db.get(Business, booking.business_id)
-        staff = await self.db.get(Staff, booking.staff_id) if booking.staff_id else None
+    @staticmethod
+    def _response(booking: Booking, business: Optional[Business], staff: Optional[Staff]) -> BookingResponse:
+        tz = ZoneInfo(business.timezone) if business else timezone.utc
         return BookingResponse(
             bookingId=booking.id,
             reference=booking.reference,
@@ -226,7 +337,7 @@ class BookingsService:
             ],
             date=booking.local_date,
             time=booking.local_time,
-            startsAt=_aware(booking.starts_at).astimezone(ZoneInfo(business.timezone if business else "UTC")),
+            startsAt=_aware(booking.starts_at).astimezone(tz),
             durationMinutes=booking.duration_minutes,
             totalAmount=Money(amount=booking.total_amount, currency=booking.currency),
             depositAmount=Money(amount=booking.deposit_amount, currency=booking.currency) if booking.deposit_amount else None,

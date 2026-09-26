@@ -16,7 +16,7 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | BK-20 | Booking tables, state machine, exclusion constraint | M2 | M | BK-02, BK-05 | eslieh | done |
 | BK-21 | Price and deposit calculator | M2 | S | — | eslieh | done |
 | BK-22 | `POST /bookings` | M2 | L | BK-10, BK-20, BK-21 | eslieh | done |
-| BK-23 | `GET /bookings/{id}` and `GET /me/bookings` | M2 | S | BK-20 | | todo |
+| BK-23 | `GET /bookings/{id}` and `GET /me/bookings` | M2 | S | BK-20 | eslieh | done |
 | BK-24 | Expire unpaid holds | M2 | S | BK-20, BK-25 | | todo |
 | BK-25 | Periodic jobs in the worker (`--beat`) | M2 | M | — | | todo |
 | BK-26 | Assign staff to an unassigned booking | M2 | S | BK-22 | | todo |
@@ -135,7 +135,8 @@ A pure function: `(services with quantities, policies) -> { total, deposit | Non
 - The customer who booked, and the business's owner or staff, can read a booking; everyone else gets 404.
 - `filter=upcoming` (`starts_at` in the future and active), `past`, `cancelled`; newest first, paginated with `?cursor=`.
 
-- [ ] The response includes `depositPayment` (from BK-31 once it exists; `null` until then).
+- [x] The response includes `depositPayment` (`null` until BK-31 fills it).
+- Also: reading a booking releases expired holds on the spot, so an unpaid booking never shows as still pending (`tests/test_read_bookings.py`).
 
 ### BK-24 · Expire unpaid holds
 - `booking.expire_holds`, run every minute by `--beat`: `pending_payment` bookings past `expires_at` move to `cancelled` with `cancelReason: "payment_expired"`.

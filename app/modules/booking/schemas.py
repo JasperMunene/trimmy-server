@@ -81,6 +81,16 @@ class BookingLineResponse(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class DepositPaymentResponse(BaseModel):
+    """The latest attempt to pay this booking's deposit (from BK-31)."""
+
+    payment_id: uuid_pkg.UUID = Field(alias="paymentId")
+    status: str  # pending | succeeded | failed | timeout
+    failure_reason: Optional[str] = Field(None, alias="failureReason")  # cancelled | insufficient_funds | wrong_pin | timeout | busy | failed
+
+    model_config = {"populate_by_name": True}
+
+
 class BookingResponse(BaseModel):
     """The app's Booking type (mobile src/types/booking.ts), plus reference, startsAt, expiresAt."""
 
@@ -108,7 +118,17 @@ class BookingResponse(BaseModel):
     # Set while status is pending_payment: pay the deposit before this or the slot is released.
     expires_at: Optional[datetime] = Field(None, alias="expiresAt")
     cancel_reason: Optional[str] = Field(None, alias="cancelReason")
+    # Null until a deposit payment has been started (BK-31).
+    deposit_payment: Optional[DepositPaymentResponse] = Field(None, alias="depositPayment")
     notes: Optional[str] = None
     created_at: datetime = Field(alias="createdAt")
+
+    model_config = {"populate_by_name": True}
+
+
+class ListBookingsResponse(BaseModel):
+    bookings: List[BookingResponse]
+    # Pass as ?cursor= to get the next page; null on the last page.
+    next_cursor: Optional[str] = Field(None, alias="nextCursor")
 
     model_config = {"populate_by_name": True}

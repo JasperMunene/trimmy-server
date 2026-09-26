@@ -183,6 +183,8 @@ class AvailabilityService:
         Widened by the buffer on both sides, since a booking's buffer can reach into the window.
         """
         margin = timedelta(minutes=ctx.settings.buffer_minutes)
+        # Compare in UTC: SQLite stores the UTC wall time without an offset.
+        start, end = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
         rows = (
             await self.db.execute(
                 select(Booking)

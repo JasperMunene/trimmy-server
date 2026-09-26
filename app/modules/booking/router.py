@@ -9,11 +9,18 @@ from app.core.database import get_db
 from app.core.dependencies import get_current_verified_user
 from app.modules.auth.models import User
 from app.modules.booking.bookings import BookingsService
-from app.modules.booking.schemas import BookingResponse, CreateBookingRequest, DaySlotsResponse, DaysResponse
+from app.modules.booking.schemas import (
+    BookingResponse,
+    CreateBookingRequest,
+    DaySlotsResponse,
+    DaysResponse,
+    ListBookingsResponse,
+)
 from app.modules.booking.service import AvailabilityService
 
 availability_router = APIRouter(prefix="/businesses", tags=["Booking"])
 bookings_router = APIRouter(prefix="/bookings", tags=["Booking"])
+my_bookings_router = APIRouter(tags=["Booking"])
 
 _SERVICE_IDS = Query(..., alias="serviceIds", description="Repeat for each service: ?serviceIds=a&serviceIds=b")
 
@@ -52,3 +59,25 @@ async def create_booking(
     """Book a slot. No deposit: confirmed at once. Deposit due: pending_payment, holding the
     slot until expiresAt (pay via POST /bookings/{id}/payments, BK-31)."""
     return await BookingsService(db).create(current_user, data)
+
+
+@bookings_router.get("/{booking_id}", response_model=BookingResponse)
+async def get_booking(
+    booking_id: str,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """For the customer who booked, and the business's owner and staff. Poll this while paying."""
+    return await BookingsService(db).get(current_user, booking_id)
+
+
+@my_bookings_router.get("/me/bookings", response_model=ListBookingsResponse)
+async def list_my_bookings(
+    filter: str = Query("upcoming", description="upcoming (soonest first) | past | cancelled (newest first)"),
+    cursor: Optional[str] = Query(None, description="nextCursor from the previous page"),
+    limit: int = Query(20, description="1-50"),
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """My Appointments: the signed-in customer's bookings."""
+    return await BookingsService(db).list_mine(current_user, filter, cursor, limit)
