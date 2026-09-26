@@ -23,7 +23,7 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | BK-30 | Daraja client with payment routing (port from `payment-routing-test`) | M3 | M | — | eslieh | done |
 | BK-31 | Payments table and `POST /bookings/{id}/payments` | M3 | M | BK-22, BK-30 | eslieh | done |
 | BK-32 | M-Pesa callback endpoint | M3 | M | BK-31 | eslieh | done |
-| BK-33 | Reconcile stuck payments | M3 | S | BK-25, BK-31 | | todo |
+| BK-33 | Reconcile stuck payments | M3 | S | BK-25, BK-31 | eslieh | done |
 | BK-34 | Deposit and receipt on the booking, per-business deposit totals | M3 | S | BK-32 | | todo |
 | BK-35 | Prove payment routing in production | M3 | S | BK-30 | eslieh | in progress |
 | BK-36 | Payment destinations fit Daraja limits; merge bank lists | M3 | S | — | | todo |
@@ -199,7 +199,8 @@ A pure function: `(services with quantities, policies) -> { total, deposit | Non
 ### BK-33 · Reconcile stuck payments
 - `payments.reconcile_pending`, run every minute: STK Query for payments pending more than 60 seconds, applying the same result handling as the callback. After 3 minutes with no answer, mark the attempt `timeout`.
 
-- [ ] Shares one code path with the callback for applying a result.
+- [x] Shares one code path with the callback for applying a result (`apply_result()`; `app/modules/payments/tasks.py`, `tests/test_reconcile.py`).
+- Also: a payment that never got a CheckoutRequestID (process died mid-push) is marked failed after 3 minutes; an unconfigured provider is logged, not raised.
 
 ### BK-34 · Deposit and receipt on the booking, per-business deposit totals
 With payment routing (D1) the money is already in the business's account, so there's nothing to settle. Record what was paid, and where it went, for the owner's view.
