@@ -14,7 +14,7 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | BK-10 | Availability engine (pure function) | M1 | L | BK-02, BK-03, BK-04 | eslieh | done |
 | BK-11 | Availability endpoints | M1 | M | BK-10 | eslieh | done |
 | BK-20 | Booking tables, state machine, exclusion constraint | M2 | M | BK-02, BK-05 | eslieh | done |
-| BK-21 | Price and deposit calculator | M2 | S | — | | todo |
+| BK-21 | Price and deposit calculator | M2 | S | — | eslieh | done |
 | BK-22 | `POST /bookings` | M2 | L | BK-10, BK-20, BK-21 | | todo |
 | BK-23 | `GET /bookings/{id}` and `GET /me/bookings` | M2 | S | BK-20 | | todo |
 | BK-24 | Expire unpaid holds | M2 | S | BK-20, BK-25 | | todo |
@@ -116,7 +116,7 @@ The exclusion constraint (D9) can't be tested on SQLite.
 A pure function: `(services with quantities, policies) -> { total, deposit | None }`.
 
 - Fixed: `min(amount, total)`. Percent: `ceil(total × percent / 100)` in whole KES. `selected_services`: the deposit is based only on those lines, and there's no deposit when none of them are in the cart.
-- [ ] Table-driven tests for every combination above, plus the "required = false" case.
+- [x] Table-driven tests for every combination above, plus the "required = false" case (`tests/test_pricing.py`, `app/modules/booking/pricing.py`).
 
 ### BK-22 · `POST /bookings`
 - Request and response as in PLAN.md section 5. The server recomputes prices (D7) and takes a per-business, per-day advisory lock (`pg_advisory_xact_lock`), then checks the slot with the availability engine and inserts, all in one transaction. "Any available" is stored unassigned (D4). If the constraint fires, map it to `409 slot_unavailable`.
