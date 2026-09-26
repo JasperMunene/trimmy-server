@@ -20,8 +20,15 @@ os.environ["MEDIA_ROOT"] = tempfile.mkdtemp(prefix="trimmy-test-media-")
 # .env holds production M-Pesa credentials: blank them so no test can ever send a real
 # STK push. Tests that need a provider swap in a fake (see tests/test_payments.py).
 os.environ["MPESA_ENV"] = "sandbox"
-for _name in ("MPESA_CONSUMER_KEY", "MPESA_CONSUMER_SECRET", "MPESA_SHORTCODE", "MPESA_PASSKEY",
-              "MPESA_CALLBACK_URL", "MPESA_CALLBACK_SECRET"):
+# Same for every other outside service: with these blank, email and SMS are only logged
+# (see deliver() / deliver_sms()), so tests never message the made-up addresses and
+# phone numbers they use, some of which may belong to real people.
+EXTERNAL_SEND_SETTINGS = (
+    "MPESA_CONSUMER_KEY", "MPESA_CONSUMER_SECRET", "MPESA_SHORTCODE", "MPESA_PASSKEY",
+    "MPESA_CALLBACK_URL", "MPESA_CALLBACK_SECRET",
+    "RESEND_API_KEY", "SMS_API_KEY", "SMS_USER_ID", "SMS_PASSWORD",
+)
+for _name in EXTERNAL_SEND_SETTINGS:
     os.environ[_name] = ""
 
 from app.core.base import Base
