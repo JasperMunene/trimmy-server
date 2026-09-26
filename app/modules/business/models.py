@@ -267,11 +267,28 @@ class Staff(Base):
     # Copied from the invitation on accept; Staff is the source of truth from then on.
     working_days: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     commission_percent: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # True: performs every service (the default). False: only the services in staff_services,
+    # which may be none (e.g. front desk). An explicit flag, so deleting a staff member's last
+    # mapped service can't silently turn them into "performs everything".
+    performs_all_services: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
     business: Mapped["Business"] = relationship(back_populates="staff")
+
+
+class StaffService(Base):
+    """A service a staff member performs (only consulted when performs_all_services is False)."""
+
+    __tablename__ = "staff_services"
+
+    staff_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID, ForeignKey("staff.id", ondelete="CASCADE"), primary_key=True
+    )
+    service_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID, ForeignKey("services.id", ondelete="CASCADE"), primary_key=True, index=True
+    )
 
 
 class Review(Base):

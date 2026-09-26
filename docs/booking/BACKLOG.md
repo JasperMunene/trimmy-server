@@ -1,6 +1,6 @@
 # Booking backlog
 
-Tasks for [PLAN.md](PLAN.md). To pick one up, check its dependencies are `done`, then put your name in **Owner** and set **Status** to `in progress`. Update the row when you open the PR (`in review`) and when it merges (`done`). The detail for each task, including acceptance criteria, is below the table.
+Tasks for [PLAN.md](PLAN.md). API changes the app needs to pick up are logged in [FRONTEND_CHANGES.md](FRONTEND_CHANGES.md). To pick one up, check its dependencies are `done`, then put your name in **Owner** and set **Status** to `in progress`. Update the row when you open the PR (`in review`) and when it merges (`done`). The detail for each task, including acceptance criteria, is below the table.
 
 Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status is one of `todo`, `in progress`, `in review`, `done` or `blocked`.
 
@@ -8,7 +8,7 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | --- | --- | --- | --- | --- | --- | --- |
 | BK-01 | Confirm decisions D1–D9 | M0 | S | — | | in progress |
 | BK-02 | Staff identity: `Staff.id` as `staffId`, working days on `Staff` | M0 | M | BK-01 | eslieh | done |
-| BK-03 | Staff ↔ services mapping | M0 | M | BK-02 | | todo |
+| BK-03 | Staff ↔ services mapping | M0 | M | BK-02 | eslieh | done |
 | BK-04 | Business timezone and booking settings | M0 | S | BK-01 | | todo |
 | BK-05 | Run tests on Postgres in CI | M0 | S | — | | todo |
 | BK-10 | Availability engine (pure function) | M1 | L | BK-02, BK-03, BK-04 | | todo |
@@ -62,12 +62,12 @@ Today one person is a `TeamInvitation` (roster, `workingDays`, `commissionPercen
 - [x] Migration `006` moves existing data and downgrades cleanly.
 
 ### BK-03 · Staff ↔ services mapping
-- New `staff_services` table. No rows for a staff member means they perform every service.
-- `PUT /businesses/{id}/staff/{staffId}/services` with `{ serviceIds: [] }` (owner only; ids must belong to the business).
-- Include `serviceIds` on staff in the profile and team responses.
+- New `staff_services` table plus a `Staff.performs_all_services` flag (default true). The flag is explicit so deleting someone's last mapped service can't silently make them "perform everything".
+- `GET`/`PUT /businesses/{id}/staff/{staffId}/services` with `{ allServices, serviceIds }` (owner only; ids must belong to the business).
+- `allServices` and `serviceIds` on profile staff.
 
-- [ ] Deleting a service removes its mapping rows.
-- [ ] Tests cover the "no rows = everything" default.
+- [x] Deleting a service or category removes its mapping rows.
+- [x] Tests cover the "all services" default and "performs nothing" (`tests/test_staff_services.py`).
 
 ### BK-04 · Business timezone and booking settings
 - Columns on `businesses`: `timezone` (default `Africa/Nairobi`, validated against the IANA zone list), `slot_interval_minutes` (15), `buffer_minutes` (0), `min_lead_minutes` (30), `max_days_ahead` (30).

@@ -455,6 +455,9 @@ class StaffMemberResponse(BaseModel):
     role: str
     # Null = works whenever the business is open.
     working_days: Optional[List[str]] = Field(None, alias="workingDays")
+    # allServices true = performs every service; otherwise only serviceIds (possibly none).
+    all_services: bool = Field(True, alias="allServices")
+    service_ids: List[uuid_pkg.UUID] = Field([], alias="serviceIds")
     rating: float
     avatar_url: Optional[str] = Field(None, alias="avatarUrl")
     bio: Optional[str] = None
@@ -587,3 +590,23 @@ class BankOption(BaseModel):
 class PaymentDestinationOptionsResponse(BaseModel):
     types: List[PaymentTypeOption]
     banks: List[BankOption]
+
+
+# ─── Staff services ──────────────────────────────────────────
+
+class SetStaffServicesRequest(BaseModel):
+    """allServices: true (and no serviceIds) = performs every service, including ones added later.
+    allServices: false = performs exactly serviceIds, which may be empty (e.g. front desk)."""
+
+    all_services: bool = Field(alias="allServices")
+    service_ids: List[uuid_pkg.UUID] = Field([], alias="serviceIds")
+
+    model_config = {"populate_by_name": True}
+
+
+class StaffServicesResponse(BaseModel):
+    staff_id: uuid_pkg.UUID = Field(alias="staffId")
+    all_services: bool = Field(alias="allServices")
+    service_ids: List[uuid_pkg.UUID] = Field(alias="serviceIds")
+
+    model_config = {"populate_by_name": True}

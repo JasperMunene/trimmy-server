@@ -25,6 +25,7 @@ from app.modules.business.models import (
     Service,
     ServiceCategory,
     Staff,
+    StaffService,
     TeamInvitation,
     TeamMode,
     VerificationStatus,
@@ -65,8 +66,10 @@ from app.modules.business.schemas import (
     ServiceResponse,
     SetPaymentDestinationRequest,
     SetPoliciesRequest,
+    SetStaffServicesRequest,
     SetTeamModeRequest,
     StaffMemberResponse,
+    StaffServicesResponse,
     TeamMemberResponse,
     TeamModeResponse,
     UpdateBusinessResponse,
@@ -671,6 +674,7 @@ class BusinessService:
             )
         await self.db.delete(service)
         await self._forget_deposit_services(business.id, {service.id})
+        await self.db.execute(delete(StaffService).where(StaffService.service_id == service.id))
         await self.db.commit()
 
     async def delete_service_category(self, business_id: str, user_id: str, category_id: str) -> None:
@@ -686,6 +690,8 @@ class BusinessService:
         )
         await self.db.delete(category)
         await self._forget_deposit_services(business.id, service_ids)
+        if service_ids:
+            await self.db.execute(delete(StaffService).where(StaffService.service_id.in_(service_ids)))
         await self.db.commit()
 
     async def _forget_deposit_services(self, business_id: uuid_pkg.UUID, service_ids: set) -> None:
@@ -883,6 +889,64 @@ class BusinessService:
         await self.db.commit()
         await self.db.refresh(invitation)
         return invitation
+
+    # ─── staff services ──────────────────────────────────────
+
+    async def _get_staff(self, business: Business, staff_id: str) -> Staff:
+        staff = await self.db.get(Staff, self._parse_path_id(staff_id, "staffId"))
+        if not staff or staff.business_id != business.id:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "message": "staffId does not exist for this business"},
+            )
+        return staff
+
+    async def staff_service_ids(self, staff_ids: list) -> dict:
+        """staff id -> [service ids] for the given staff, in one query."""
+        if not staff_ids:
+            return {}
+        rows = await self.db.execute(select(StaffService).where(StaffService.staff_id.in_(staff_ids)))
+        mapping: dict = {sid: [] for sid in staff_ids}
+        for row in rows.scalars():
+            mapping[row.staff_id].append(row.service_id)
+        return mapping
+
+    async def get_staff_services(self, business_id: str, user_id: str, staff_id: str) -> StaffServicesResponse:
+        business = await self._get_owned_business(business_id, user_id)
+        staff = await self._get_staff(business, staff_id)
+        ids = (await self.staff_service_ids([staff.id]))[staff.id]
+        return StaffServicesResponse(
+            staffId=staff.id, allServices=staff.performs_all_services,
+            serviceIds=[] if staff.performs_all_services else sorted(ids, key=str),
+        )
+
+    async def set_staff_services(
+        self, business_id: str, user_id: str, staff_id: str, data: SetStaffServicesRequest
+    ) -> StaffServicesResponse:
+        business = await self._get_owned_business(business_id, user_id)
+        staff = await self._get_staff(business, staff_id)
+
+        wanted = list(dict.fromkeys(data.service_ids))
+        if data.all_services and wanted:
+            raise _validation_error("serviceIds must be empty when allServices is true")
+        if wanted:
+            owned = set(
+                (
+                    await self.db.execute(
+                        select(Service.id).where(Service.business_id == business.id, Service.id.in_(wanted))
+                    )
+                ).scalars()
+            )
+            unknown = [str(i) for i in wanted if i not in owned]
+            if unknown:
+                raise _validation_error(f"serviceIds contains services not in this business: {', '.join(unknown)}")
+
+        staff.performs_all_services = data.all_services
+        await self.db.execute(delete(StaffService).where(StaffService.staff_id == staff.id))
+        for service_id in wanted:
+            self.db.add(StaffService(staff_id=staff.id, service_id=service_id))
+        await self.db.commit()
+        return StaffServicesResponse(staffId=staff.id, allServices=staff.performs_all_services, serviceIds=wanted)
 
     # ─── team members (post-publish roster) ──────────────────
     # The invitation is the roster record: pending until accepted, then the
@@ -1314,19 +1378,23 @@ class BusinessService:
             for s in (cat.services or [])
         ]
 
+        staff_rows = sorted(business.staff or [], key=lambda st: st.created_at)
+        mapped = await self.staff_service_ids([st.id for st in staff_rows if not st.performs_all_services])
         staff = [
             StaffMemberResponse(
                 staffId=st.id,
                 name=st.name,
                 role=st.role,
                 workingDays=st.working_days,
+                allServices=st.performs_all_services,
+                serviceIds=sorted(mapped.get(st.id, []), key=str),
                 rating=st.rating,
                 avatarUrl=st.avatar_url,
                 bio=st.bio or "",
                 specialties=st.specialties or [],
                 portfolio=st.portfolio or [],
             )
-            for st in sorted(business.staff or [], key=lambda st: st.created_at)
+            for st in staff_rows
         ]
 
         review_items = [
