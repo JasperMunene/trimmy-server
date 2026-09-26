@@ -14,6 +14,9 @@ from app.modules.booking.schemas import (
     AssignStaffRequest,
     BookingResponse,
     BusinessBookingsResponse,
+    CancelBookingRequest,
+    CancelPreviewResponse,
+    MarkRefundedRequest,
     OwnerBookingRequest,
     ScheduledBookingRequest,
     UpdateBookingStatusRequest,
@@ -65,12 +68,13 @@ async def list_business_bookings(
     status_filter: Optional[str] = Query(None, alias="status", description="Comma-separated, e.g. confirmed,in_progress"),
     staff_id: Optional[uuid_pkg.UUID] = Query(None, alias="staffId"),
     unassigned: bool = Query(False, description="Only bookings with no staff assigned"),
+    refund: Optional[str] = Query(None, description="due | refunded; date range optional with this"),
     current_user: User = Depends(get_current_verified_user),
     db: AsyncSession = Depends(get_db),
 ):
     """The business's bookings, soonest first. Owner and front desk see all; staff see their own."""
     return await BusinessBookingsService(db).list(
-        current_user, business_id, day, start, end, status_filter, staff_id, unassigned
+        current_user, business_id, day, start, end, status_filter, staff_id, unassigned, refund
     )
 
 
@@ -113,6 +117,38 @@ async def get_booking(
 ):
     """For the customer who booked, and the business's owner and staff. Poll this while paying."""
     return await BookingsService(db).get(current_user, booking_id)
+
+
+@bookings_router.get("/{booking_id}/cancel-preview", response_model=CancelPreviewResponse)
+async def cancel_preview(
+    booking_id: str,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Customer: what cancelling now would cost (fee kept, refund owed) before confirming."""
+    return await BookingsService(db).cancel_preview(current_user, booking_id)
+
+
+@bookings_router.post("/{booking_id}/cancel", response_model=BookingResponse)
+async def cancel_booking(
+    booking_id: str,
+    data: CancelBookingRequest,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Customer cancels within policy. Any refund is owed by the business, which pays it by hand."""
+    return await BookingsService(db).cancel(current_user, booking_id, data.reason)
+
+
+@bookings_router.post("/{booking_id}/refund", response_model=BookingResponse)
+async def mark_refunded(
+    booking_id: str,
+    data: MarkRefundedRequest,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Owner or front desk: record that a refund owed on this booking has been paid back."""
+    return await BusinessBookingsService(db).mark_refunded(current_user, booking_id, data.reference)
 
 
 @bookings_router.patch("/{booking_id}/status", response_model=BookingResponse)

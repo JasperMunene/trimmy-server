@@ -32,7 +32,7 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | BK-50 | Concurrency test for double-booking | M5 | S | BK-22, BK-05 | | todo |
 | BK-51 | M-Pesa production go-live | M5 | S (weeks of lead time) | BK-01 | | todo |
 | BK-52 | Contract hand-off to the app team | M5 | S | BK-22, BK-31 | | todo |
-| BK-60 | Cancel within policy | Next | M | BK-22 | | todo |
+| BK-60 | Cancel within policy | Next | M | BK-22 | eslieh | done |
 | BK-61 | Reschedule | Next | M | BK-22, BK-11 | | todo |
 | BK-62 | Reminders 24h and 2h before | Next | M | BK-25, BK-40 | | todo |
 | BK-63 | Owner and front-desk bookings (list, walk-in, on-behalf, status) | Next | L | BK-22 | eslieh | done |
@@ -254,7 +254,9 @@ Start on day one; Safaricom's approval takes weeks.
 ## Next phase
 
 ### BK-60 · Cancel within policy
-`POST /bookings/{id}/cancel`, with a preview (`GET /bookings/{id}/cancel-preview`) showing the refund or fee from `cancellation_free_hours` and `late_fee_percent`. With payment routing, the deposit sits in the business's account, so Trimmy can't refund it itself. Decide first: the business refunds by hand (and marks it refunded), or deposits become credit for the next booking.
+`POST /bookings/{id}/cancel`, with a preview (`GET /bookings/{id}/cancel-preview`) showing the refund or fee from `cancellation_free_hours` and `late_fee_percent`. With payment routing, the deposit sits in the business's account, so Trimmy can't refund it itself.
+
+Done (2026-09-27; decision D10: the business refunds by hand): pure `cancellation.outcome()` shared by preview and cancel; free window = full refund, late = fee of `late_fee_percent` of the total capped at the deposit; business cancels and late payments into a taken slot = full refund due; `POST /bookings/{id}/refund` for the owner to mark it paid back; `?refund=due` on the business list; migration `012` (`tests/test_cancel.py`). Not done: an SMS to the customer on cancellation.
 
 ### BK-61 · Reschedule
 `POST /bookings/{id}/reschedule` `{ date, time }`, which reuses availability and the conflict check atomically and keeps any paid deposit.

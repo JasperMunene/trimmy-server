@@ -15,11 +15,21 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.modules.auth.models import User
-from app.modules.booking import availability
-from app.modules.booking.models import ACTIVE_STATUSES, Booking, BookingEvent, BookingLine, BookingStatus
+from app.modules.booking import availability, cancellation
+from app.modules.booking.models import (
+    ACTIVE_STATUSES,
+    Booking,
+    BookingEvent,
+    BookingLine,
+    BookingStatus,
+    PaymentStatus,
+    RefundStatus,
+)
 from app.modules.booking.pricing import DepositPolicy, Line, PricingError, quote_booking
 from app.modules.booking.schemas import (
     BookingLineResponse,
+    CancelPreviewResponse,
+    RefundResponse,
     DepositPaymentResponse,
     BookingResponse,
     CreateBookingRequest,
@@ -111,6 +121,21 @@ def _decode_cursor(cursor: str) -> tuple[datetime, uuid_pkg.UUID]:
         return datetime.fromisoformat(when).astimezone(timezone.utc), uuid_pkg.UUID(booking_id)
     except (ValueError, binascii.Error, UnicodeDecodeError):
         raise _error(400, "validation_error", "Invalid cursor")
+
+
+def deposit_paid(booking: Booking) -> int:
+    """The deposit actually paid on this booking (0 if none was, or it's still unpaid)."""
+    if booking.payment_status != PaymentStatus.DEPOSIT_PAID:
+        return 0
+    return booking.deposit_amount or 0
+
+
+def record_refund(booking: Booking, fee: int, refund: int) -> None:
+    """Store a cancellation's money: the fee kept, and any refund the business now owes (D10)."""
+    booking.cancellation_fee = fee or None
+    if refund > 0:
+        booking.refund_amount = refund
+        booking.refund_status = RefundStatus.DUE
 
 
 class BookingsService:
@@ -225,6 +250,77 @@ class BookingsService:
         if booking.status == BookingStatus.CONFIRMED:
             from app.modules.booking.tasks import notify_confirmed
             await notify_confirmed(booking.id)
+        return await self.get_response(booking.id)
+
+    # ─── cancelling (BK-60) ──────────────────────────────────
+
+    async def _own_booking(self, user: User, booking_id: str) -> Booking:
+        not_found = _error(404, "not_found", "No booking found for this id")
+        try:
+            bid = uuid_pkg.UUID(str(booking_id))
+        except ValueError:
+            raise not_found
+        booking = (
+            await self.db.execute(select(Booking).where(Booking.id == bid).options(selectinload(Booking.events)))
+        ).scalar_one_or_none()
+        if booking is None or booking.customer_id != user.id:
+            raise not_found
+        return booking
+
+    async def _outcome(self, booking: Booking) -> tuple[cancellation.CancellationOutcome, int]:
+        policies = (
+            await self.db.execute(select(BusinessPolicies).where(BusinessPolicies.business_id == booking.business_id))
+        ).scalar_one_or_none()
+        late_fee = policies.cancellation_late_fee_percent if policies else 50
+        result = cancellation.outcome(
+            status=booking.status,
+            starts_at=_aware(booking.starts_at),
+            total=booking.total_amount,
+            deposit_paid=deposit_paid(booking),
+            free_hours=policies.cancellation_free_hours if policies else 24,
+            late_fee_percent=late_fee,
+            now=self.now,
+        )
+        return result, late_fee
+
+    async def cancel_preview(self, user: User, booking_id: str) -> CancelPreviewResponse:
+        booking = await self._own_booking(user, booking_id)
+        result, late_fee = await self._outcome(booking)
+        cur = booking.currency
+        if not result.can_cancel:
+            message = result.reason_blocked
+        elif result.deposit_paid == 0:
+            message = "Free to cancel: no deposit was paid."
+        elif result.fee == 0:
+            message = f"Free cancellation: your {cur} {result.refund:,} deposit will be refunded by the business."
+        else:
+            message = (
+                f"Late cancellation: {cur} {result.fee:,} of your deposit is kept"
+                + (f" and {cur} {result.refund:,} will be refunded by the business." if result.refund else ".")
+            )
+        return CancelPreviewResponse(
+            bookingId=booking.id,
+            canCancel=result.can_cancel,
+            reasonBlocked=result.reason_blocked,
+            freeUntil=result.free_until,
+            withinFreeWindow=result.within_free_window,
+            depositPaid=Money(amount=result.deposit_paid, currency=cur),
+            fee=Money(amount=result.fee, currency=cur),
+            refund=Money(amount=result.refund, currency=cur),
+            lateFeePercent=late_fee,
+            message=message,
+        )
+
+    async def cancel(self, user: User, booking_id: str, reason: Optional[str]) -> BookingResponse:
+        booking = await self._own_booking(user, booking_id)
+        result, _ = await self._outcome(booking)
+        if not result.can_cancel:
+            raise _error(409, "cannot_cancel", result.reason_blocked)
+        transition(booking, BookingStatus.CANCELLED, actor_id=user.id, reason="customer")
+        record_refund(booking, result.fee, result.refund)
+        if reason:
+            booking.events[-1].reason = f"customer: {reason}"[:100]
+        await self.db.commit()
         return await self.get_response(booking.id)
 
     # ─── assigning staff (BK-26) ─────────────────────────────
@@ -430,6 +526,16 @@ class BookingsService:
                 if deposit else None
             ),
             paymentReference=deposit.mpesa_receipt if deposit else None,
+            cancellationFee=Money(amount=booking.cancellation_fee, currency=booking.currency) if booking.cancellation_fee else None,
+            refund=(
+                RefundResponse(
+                    amount=Money(amount=booking.refund_amount or 0, currency=booking.currency),
+                    status=booking.refund_status,
+                    refundedAt=_aware(booking.refunded_at) if booking.refunded_at else None,
+                    reference=booking.refund_reference,
+                )
+                if booking.refund_status else None
+            ),
             paymentMethod="mpesa" if deposit and deposit.mpesa_receipt else None,
             notes=booking.notes,
             createdAt=_aware(booking.created_at),

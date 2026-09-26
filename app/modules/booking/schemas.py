@@ -97,6 +97,17 @@ class DepositPaymentResponse(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class RefundResponse(BaseModel):
+    """Money the business owes back after a cancellation (D10: refunded by hand)."""
+
+    amount: Money
+    status: str  # due | refunded
+    refunded_at: Optional[datetime] = Field(None, alias="refundedAt")
+    reference: Optional[str] = None  # e.g. the M-Pesa code of the refund
+
+    model_config = {"populate_by_name": True}
+
+
 class BookingResponse(BaseModel):
     """The app's Booking type (mobile src/types/booking.ts), plus reference, startsAt, expiresAt."""
 
@@ -126,6 +137,9 @@ class BookingResponse(BaseModel):
     cancel_reason: Optional[str] = Field(None, alias="cancelReason")
     # Null until a deposit payment has been started (BK-31).
     deposit_payment: Optional[DepositPaymentResponse] = Field(None, alias="depositPayment")
+    # Set when a cancellation kept part of the deposit, or left a refund owed (BK-60).
+    cancellation_fee: Optional[Money] = Field(None, alias="cancellationFee")
+    refund: Optional[RefundResponse] = None
     notes: Optional[str] = None
     created_at: datetime = Field(alias="createdAt")
 
@@ -169,3 +183,30 @@ class UpdateBookingStatusRequest(BaseModel):
 
 class BusinessBookingsResponse(BaseModel):
     bookings: List[BookingResponse]
+
+
+
+# ─── Cancelling (BK-60) ──────────────────────────────────────
+
+class CancelPreviewResponse(BaseModel):
+    booking_id: uuid_pkg.UUID = Field(alias="bookingId")
+    can_cancel: bool = Field(alias="canCancel")
+    reason_blocked: Optional[str] = Field(None, alias="reasonBlocked")
+    # Cancel before this for a full refund.
+    free_until: datetime = Field(alias="freeUntil")
+    within_free_window: bool = Field(alias="withinFreeWindow")
+    deposit_paid: Money = Field(alias="depositPaid")
+    fee: Money  # kept by the business
+    refund: Money  # owed back; the business refunds it by hand
+    late_fee_percent: int = Field(alias="lateFeePercent")
+    message: str
+
+    model_config = {"populate_by_name": True}
+
+
+class CancelBookingRequest(BaseModel):
+    reason: Optional[str] = Field(None, max_length=100)  # optional note from the reason picker
+
+
+class MarkRefundedRequest(BaseModel):
+    reference: Optional[str] = Field(None, max_length=50, examples=["SJK4R2T8QX"])

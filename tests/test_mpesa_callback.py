@@ -137,4 +137,5 @@ async def test_late_payment_when_the_slot_was_taken_is_flagged_for_refund(client
     b = await get_booking(client, cust, pending_booking)
     assert (b["status"], b["cancelReason"], b["paymentStatus"]) == ("cancelled", "payment_expired", "deposit_paid")
     assert (await reasons(db_session, pending_booking["bookingId"]))[-1] == "late_payment_refund_due"
+    assert (b["refund"]["amount"]["amount"], b["refund"]["status"]) == (300, "due")  # the business refunds it (D10)
 

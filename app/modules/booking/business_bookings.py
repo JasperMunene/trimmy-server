@@ -13,8 +13,16 @@ from sqlalchemy.orm import selectinload
 
 from app.modules.auth.models import User
 from app.modules.booking import availability
-from app.modules.booking.bookings import BookingsService, _lock_business_day, expire_holds
-from app.modules.booking.models import ACTIVE_STATUSES, Booking, BookingLine, BookingSource, BookingStatus
+from app.modules.booking.bookings import BookingsService, _lock_business_day, deposit_paid, expire_holds, record_refund
+from app.modules.booking.models import (
+    ACTIVE_STATUSES,
+    Booking,
+    BookingEvent,
+    BookingLine,
+    BookingSource,
+    BookingStatus,
+    RefundStatus,
+)
 from app.modules.booking.pricing import Line, PricingError, quote_booking
 from app.modules.booking.schemas import (
     BookingResponse,
@@ -77,6 +85,7 @@ class BusinessBookingsService:
         status: Optional[str],
         staff_id: Optional[uuid_pkg.UUID],
         unassigned: bool,
+        refund: Optional[str] = None,
     ) -> BusinessBookingsResponse:
         try:
             bid = uuid_pkg.UUID(str(business_id))
@@ -86,26 +95,33 @@ class BusinessBookingsService:
         if role is None:
             raise _error(404, "not_found", "No business found for this id")
 
+        if refund is not None and refund not in (RefundStatus.DUE, RefundStatus.REFUNDED):
+            raise _error(400, "validation_error", "refund must be due or refunded")
         if day:
             start = end = day
-        if not start or not end:
+        # Refunds owed are listed whatever their date; everything else needs a range.
+        if (not start or not end) and refund is None:
             raise _error(400, "validation_error", "Pass date, or from and to")
-        if end < start or (end - start).days >= MAX_RANGE_DAYS:
+        if start and end and (end < start or (end - start).days >= MAX_RANGE_DAYS):
             raise _error(400, "validation_error", f"from..to must be 1 to {MAX_RANGE_DAYS} days")
 
         business = await self.db.get(Business, bid)
         tz = ZoneInfo(business.timezone)
-        lo = datetime.combine(start, time(0, 0), tz).astimezone(timezone.utc)
-        hi = datetime.combine(end + timedelta(days=1), time(0, 0), tz).astimezone(timezone.utc)
 
         if await expire_holds(self.db, self.now, business_id=bid):
             await self.db.commit()
         query = (
             select(Booking)
-            .where(Booking.business_id == bid, Booking.starts_at < hi, Booking.ends_at > lo)
+            .where(Booking.business_id == bid)
             .options(selectinload(Booking.lines))
             .order_by(Booking.starts_at, Booking.id)
         )
+        if start and end:
+            lo = datetime.combine(start, time(0, 0), tz).astimezone(timezone.utc)
+            hi = datetime.combine(end + timedelta(days=1), time(0, 0), tz).astimezone(timezone.utc)
+            query = query.where(Booking.starts_at < hi, Booking.ends_at > lo)
+        if refund is not None:
+            query = query.where(Booking.refund_status == refund)
         if role == STAFF:
             query = query.where(Booking.staff_id == me.id)  # staff see their own chair only
         elif staff_id:
@@ -237,5 +253,38 @@ class BusinessBookingsService:
             transition(booking, data.status, actor_id=user.id, reason=reason)
         except InvalidTransition as e:
             raise _error(400, "invalid_status_transition", f"Cannot move from {e.from_status} to {e.to_status}")
+        if data.status == BookingStatus.CANCELLED:
+            # The business called it off: the whole paid deposit goes back (D10).
+            record_refund(booking, fee=0, refund=deposit_paid(booking))
+        await self.db.commit()
+        return await self.bookings.get_response(booking.id)
+
+    # ─── refunds (BK-60, D10) ────────────────────────────────
+
+    async def mark_refunded(self, user: User, booking_id: str, reference: Optional[str]) -> BookingResponse:
+        """The business has sent the money back by hand; record it."""
+        not_found = _error(404, "not_found", "bookingId does not exist")
+        try:
+            bid = uuid_pkg.UUID(str(booking_id))
+        except ValueError:
+            raise not_found
+        booking = await self.db.get(Booking, bid)
+        if booking is None:
+            raise not_found
+        role, _ = await self._role(user, booking.business_id)
+        if role is None:
+            raise not_found
+        if role not in (OWNER, FRONT_DESK):
+            raise _error(403, "forbidden", "Only the owner or front desk can do this")
+        if booking.refund_status != RefundStatus.DUE:
+            raise _error(409, "no_refund_due", "There's no refund owed on this booking")
+
+        booking.refund_status = RefundStatus.REFUNDED
+        booking.refunded_at = self.now
+        booking.refund_reference = (reference or "").strip() or None
+        self.db.add(BookingEvent(
+            booking_id=booking.id, from_status=booking.status, to_status=booking.status, actor_id=user.id,
+            reason=f"refunded {booking.refund_reference or ''}".strip()[:100],
+        ))
         await self.db.commit()
         return await self.bookings.get_response(booking.id)

@@ -26,6 +26,11 @@ class BookingStatus(str, PyEnum):
 ACTIVE_STATUSES = (BookingStatus.PENDING_PAYMENT, BookingStatus.CONFIRMED, BookingStatus.IN_PROGRESS)
 
 
+class RefundStatus(str, PyEnum):
+    DUE = "due"
+    REFUNDED = "refunded"
+
+
 class BookingSource(str, PyEnum):
     ONLINE = "online"
     WALK_IN = "walk_in"
@@ -92,6 +97,13 @@ class Booking(Base):
     # pending_payment holds the slot until this moment (D6).
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     cancel_reason: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # Cancellation money (BK-60, D10): the fee kept from the deposit, and what the
+    # business owes back and has to refund by hand.
+    cancellation_fee: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    refund_amount: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    refund_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # due | refunded
+    refunded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    refund_reference: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     # Set when the confirmation SMS is claimed for sending (BK-40), so it goes out once.
     confirmation_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 

@@ -4,6 +4,77 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-27 · Cancel within policy, refunds by hand (BK-60)
+
+**Why:** C3 "cancel within policy". Deposits sit in the business's own account, so refunds are paid back by the business by hand (decision D10); the app shows what's owed and when it's done.
+
+**New endpoints → `booking.json`**
+
+```json
+{
+  "id": "cancel-preview",
+  "status": "live",
+  "screen": "Cancel Confirmation (modal): refund/fee breakdown",
+  "method": "GET",
+  "path": "/bookings/{bookingId}/cancel-preview",
+  "auth": "the customer who booked",
+  "description": "What cancelling right now would cost. Free before freeUntil (the business's freeCancellationHours before the start): the whole paid deposit is refunded. Later: lateFeePercent of the booking total is kept, capped at the deposit, and the rest refunded. No deposit paid: free. Show message as-is.",
+  "response": {
+    "bookingId": "uuid", "canCancel": true, "reasonBlocked": null,
+    "freeUntil": "2026-10-04T14:30:00Z", "withinFreeWindow": true,
+    "depositPaid": { "amount": 300, "currency": "KES" },
+    "fee": { "amount": 0, "currency": "KES" },
+    "refund": { "amount": 300, "currency": "KES" },
+    "lateFeePercent": 50,
+    "message": "Free cancellation: your KES 300 deposit will be refunded by the business."
+  }
+},
+{
+  "id": "cancel-booking",
+  "status": "live",
+  "screen": "Cancel Confirmation (modal): confirm",
+  "method": "POST",
+  "path": "/bookings/{bookingId}/cancel",
+  "auth": "the customer who booked",
+  "description": "Cancels with the same outcome the preview showed. pending_payment and confirmed bookings only, before the start time. reason is the optional note from the reason picker.",
+  "request": { "reason": "Something came up" },
+  "response": "Booking (status cancelled, cancelReason customer, plus cancellationFee and refund below)",
+  "errors": [{ "status": 409, "code": "cannot_cancel", "message": "This appointment has already started" }]
+},
+{
+  "id": "mark-refunded",
+  "status": "live",
+  "screen": "Owner / front desk: Refunds owed → Mark refunded",
+  "method": "POST",
+  "path": "/bookings/{bookingId}/refund",
+  "auth": "owner or front desk",
+  "description": "Records that the business has sent a refund it owed back to the customer. reference is optional (e.g. the M-Pesa code of the refund).",
+  "request": { "reference": "SJK4R2T8QX" },
+  "response": "Booking (refund.status refunded)",
+  "errors": [{ "status": 409, "code": "no_refund_due", "message": "There's no refund owed on this booking" }]
+}
+```
+
+**Changed response → `Booking`**: two new fields, both null unless a cancellation involved money.
+
+```json
+{
+  "cancellationFee": { "amount": 300, "currency": "KES" },
+  "refund": { "amount": { "amount": 100, "currency": "KES" }, "status": "due | refunded", "refundedAt": null, "reference": null }
+}
+```
+
+**Changed → `fulfillment.json#list-business-bookings`**: `?refund=due` lists every booking with a refund owed (no date needed), for a "Refunds owed" screen. `update-booking-status` with `cancelled` now makes the whole paid deposit refundable (the business cancelled).
+
+**App code to update**
+
+- Appointment Detail → Cancel: show `cancel-preview` (its `message`, `fee`, `refund`), then `cancel-booking`. Disable Cancel when `canCancel` is false and show `reasonBlocked`.
+- Show `refund` on cancelled bookings: "KES 300 refund pending from the business" while `due`, "Refunded" (with `reference`) once `refunded`.
+- Owner app: a "Refunds owed" list (`?refund=due`) with a "Mark refunded" action.
+- A late payment into a taken slot (BK-32) also shows up as a refund owed.
+
+---
+
 ## 2026-09-27 · Confirmation SMS (BK-40)
 
 **Why:** customers now get a text when their booking is confirmed. No API change.

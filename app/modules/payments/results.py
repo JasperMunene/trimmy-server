@@ -89,6 +89,8 @@ async def _deposit_paid(db: AsyncSession, payment: Payment, now: datetime) -> bo
             booking_id=booking.id, from_status=booking.status, to_status=booking.status,
             reason="late_payment_refund_due",
         ))
+        from app.modules.booking.bookings import record_refund
+        record_refund(booking, fee=0, refund=payment.amount)  # the business refunds it by hand (D10)
         logger.error(
             f"Booking {booking.reference} was paid ({payment.mpesa_receipt}) after its hold expired and the "
             f"slot was taken: the deposit of KES {payment.amount} needs refunding"
