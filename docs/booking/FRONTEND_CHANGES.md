@@ -4,6 +4,27 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-27 · Payments now confirm bookings (BK-32)
+
+**Why:** M-Pesa's result is now applied: a successful deposit confirms the booking. No new endpoints; the polling described under BK-31 starts working end to end.
+
+**What the app will see when polling `GET /bookings/{bookingId}`**
+
+| Outcome | `status` | `paymentStatus` | `depositPayment` | Other |
+| --- | --- | --- | --- | --- |
+| Paid | `confirmed` | `deposit_paid` | `{ status: "succeeded" }` | `paymentReference` = M-Pesa receipt, `paymentMethod` = `"mpesa"`, `expiresAt` = null |
+| Dismissed / wrong PIN / no money | `pending_payment` | `unpaid` | `{ status: "failed", failureReason }` | can retry until `expiresAt` |
+| No answer | `pending_payment` | `unpaid` | `{ status: "timeout", failureReason: "timeout" }` | can retry until `expiresAt` |
+| Paid after the hold ran out, slot still free | `confirmed` | `deposit_paid` | `{ status: "succeeded" }` | `cancelReason` back to null |
+| Paid after the hold ran out, slot taken | `cancelled` | `deposit_paid` | `{ status: "succeeded" }` | `cancelReason: "payment_expired"`; show "Your payment arrived after the booking expired; the business will refund you" |
+
+**App code to update**
+
+- STK Push Pending: stop polling when one of the rows above is reached, and route: confirmed → Booking Confirmed; failed/timeout → back to Payment Method with the `failureReason` explained; cancelled + `deposit_paid` → the refund message.
+- The last row is rare (it needs the payment to land after the 10-minute hold), and refunds are manual for now (see BK-60).
+
+---
+
 ## 2026-09-27 · Pay the deposit by M-Pesa (BK-31)
 
 **Why:** replaces the mocked `confirmBookingPayment`. It's now two steps: start the STK push, then poll the booking. The money goes straight to the business's own till, paybill or bank.
@@ -51,7 +72,7 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 - `confirmBookingPayment`: call `POST /bookings/{bookingId}/payments` with the phone from Payment Method, then show STK Push Pending and poll `GET /bookings/{bookingId}` as described. The old 402/408 errors become `depositPayment.status` `failed` / `timeout` with a `failureReason` to explain.
 - On `409 payment_in_progress`, keep polling instead of sending a new prompt.
-- **Until BK-32 lands, a payment never shows as succeeded:** the M-Pesa callback is received and logged but not yet applied to the booking. Build the polling against these states; confirmation starts working with BK-32.
+- Confirmation works from BK-32 (see above for every outcome the polling can end in).
 
 ---
 

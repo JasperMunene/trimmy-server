@@ -144,26 +144,27 @@ def slot_is_free(*, starts_at: datetime, **kwargs) -> bool:
     return any(s.starts_at == local for s in day_slots(day=local.date(), **kwargs))
 
 
-def staff_can_take(
+def booking_fits(
     *,
     start: datetime,
     end: datetime,
-    staff_id: UUID,
+    staff_id: Optional[UUID],
     staff: list[StaffInfo],
     bookings: list[ExistingBooking],
     service_ids: set[UUID],
     settings: Settings,
     now: datetime,
 ) -> bool:
-    """Whether `staff_id` can take an existing booking at [start, end) (assigning it, BK-26).
+    """Whether an existing booking at [start, end) fits with `staff_id` (or unassigned, if None).
 
+    Used to assign staff (BK-26) and to reinstate a late-paid booking (BK-32).
     Same staff and capacity rules as a new booking, but no grid, lead-time or
     opening-hours checks: the booking already exists. `bookings` must not
-    include the booking being assigned.
+    include the booking being checked.
     """
     weekday = WEEKDAYS[start.astimezone(ZoneInfo(settings.timezone)).weekday()]
     eligible = [s for s in staff if s.works_on(weekday) and s.performs(service_ids)]
-    if not any(s.id == staff_id for s in eligible):
+    if staff_id is not None and not any(s.id == staff_id for s in eligible):
         return False
     active = [b for b in bookings if b.is_active(now)]
     buffer = timedelta(minutes=settings.buffer_minutes)

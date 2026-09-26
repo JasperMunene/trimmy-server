@@ -10,6 +10,8 @@ Nothing else should assign `booking.status`.
     confirmed       -> no_show       marked by the business
     confirmed       -> cancelled     cancel within policy
     in_progress     -> completed     marked complete
+    cancelled       -> confirmed     only when the hold expired and M-Pesa then confirms the
+                                     payment while the slot is still free (late payment, BK-32)
 """
 import uuid as uuid_pkg
 from typing import Optional
@@ -24,8 +26,11 @@ TRANSITIONS: dict[str, frozenset[str]] = {
     S.IN_PROGRESS: frozenset({S.COMPLETED}),
     S.COMPLETED: frozenset(),
     S.NO_SHOW: frozenset(),
-    S.CANCELLED: frozenset(),
+    S.CANCELLED: frozenset({S.CONFIRMED}),  # guarded: see transition()
 }
+
+# The only cancellation a booking can come back from.
+REINSTATABLE_CANCEL_REASON = "payment_expired"
 
 
 class InvalidTransition(Exception):
@@ -58,10 +63,14 @@ def transition(
     """
     if not can_transition(booking.status, to_status):
         raise InvalidTransition(booking.status, to_status)
+    if booking.status == S.CANCELLED and booking.cancel_reason != REINSTATABLE_CANCEL_REASON:
+        raise InvalidTransition(booking.status, to_status)
     from_status = booking.status
     booking.status = to_status
     if to_status == S.CANCELLED:
         booking.cancel_reason = reason
+    elif from_status == S.CANCELLED:
+        booking.cancel_reason = None  # reinstated
     if to_status != S.PENDING_PAYMENT:
         booking.expires_at = None  # the hold no longer applies
     booking.events.append(BookingEvent(from_status=from_status, to_status=to_status, actor_id=actor_id, reason=reason))

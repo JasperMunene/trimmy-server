@@ -17,6 +17,7 @@ ALLOWED = {
     ("pending_payment", "confirmed"), ("pending_payment", "cancelled"),
     ("confirmed", "in_progress"), ("confirmed", "no_show"), ("confirmed", "cancelled"),
     ("in_progress", "completed"),
+    ("cancelled", "confirmed"),  # table-level; transition() only allows it after payment_expired
 }
 NBO = ZoneInfo("Africa/Nairobi")
 
@@ -177,3 +178,16 @@ async def test_database_rejects_overlapping_assigned_bookings(db_session, publis
     db_session.add(clash)
     with pytest.raises(IntegrityError):
         await db_session.commit()
+
+
+def test_only_an_expired_hold_can_be_reinstated():
+    for reason, allowed in (("payment_expired", True), ("customer", False), ("business", False)):
+        b = make_booking()
+        record_created(b, "pending_payment")
+        transition(b, "cancelled", reason=reason)
+        if allowed:
+            transition(b, "confirmed", reason="late_payment")
+            assert (b.status, b.cancel_reason) == ("confirmed", None)
+        else:
+            with pytest.raises(InvalidTransition):
+                transition(b, "confirmed")

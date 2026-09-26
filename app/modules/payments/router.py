@@ -1,5 +1,6 @@
 import hmac
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +10,7 @@ from app.core.database import get_db
 from app.core.dependencies import get_current_verified_user
 from app.modules.auth.models import User
 from app.modules.payments.mpesa import MpesaError, parse_callback
+from app.modules.payments.results import apply_result
 from app.modules.payments.schemas import StartPaymentRequest, StartPaymentResponse
 from app.modules.payments.service import PaymentsService
 
@@ -34,11 +36,11 @@ async def start_booking_payment(
 
 
 @router.post("/mpesa/callback/{secret}", include_in_schema=False)
-async def mpesa_callback(secret: str, request: Request):
+async def mpesa_callback(secret: str, request: Request, db: AsyncSession = Depends(get_db)):
     """Daraja posts STK push results here (the URL comes from MPESA_CALLBACK_URL + secret).
 
-    For now this verifies, parses and logs the result. Saving it against the
-    payment and confirming the booking is BK-32 (docs/booking/BACKLOG.md).
+    Records the result on the payment and confirms the booking (BK-32).
+    Idempotent: Daraja retries until it gets the acknowledgement.
     """
     expected = settings.MPESA_CALLBACK_SECRET
     if not expected or not hmac.compare_digest(secret, expected):
@@ -57,5 +59,6 @@ async def mpesa_callback(secret: str, request: Request):
         result.checkout_request_id, result.status, result.failure_reason, result.result_code,
         result.receipt, result.amount, result.result_desc,
     )
+    await apply_result(db, result, datetime.now(timezone.utc), raw=body)
     # Daraja retries until it gets this acknowledgement.
     return {"ResultCode": 0, "ResultDesc": "Accepted"}

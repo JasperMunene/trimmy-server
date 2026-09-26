@@ -22,7 +22,7 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | BK-26 | Assign staff to an unassigned booking | M2 | S | BK-22 | eslieh | done |
 | BK-30 | Daraja client with payment routing (port from `payment-routing-test`) | M3 | M | — | eslieh | done |
 | BK-31 | Payments table and `POST /bookings/{id}/payments` | M3 | M | BK-22, BK-30 | eslieh | done |
-| BK-32 | M-Pesa callback endpoint | M3 | M | BK-31 | | todo |
+| BK-32 | M-Pesa callback endpoint | M3 | M | BK-31 | eslieh | done |
 | BK-33 | Reconcile stuck payments | M3 | S | BK-25, BK-31 | | todo |
 | BK-34 | Deposit and receipt on the booking, per-business deposit totals | M3 | S | BK-32 | | todo |
 | BK-35 | Prove payment routing in production | M3 | S | BK-30 | eslieh | in progress |
@@ -192,8 +192,9 @@ A pure function: `(services with quantities, policies) -> { total, deposit | Non
 - Always answer Daraja with `{ "ResultCode": 0, "ResultDesc": "Accepted" }` once the callback is stored.
 - A payment that succeeds after the hold expired (from BK-24): confirm the booking if the slot is still free; otherwise flag it for a refund (log and a `booking_events` entry for now).
 
-- [ ] Replaying the same callback twice has no extra effect.
-- [ ] A wrong secret returns 404 and changes nothing.
+- [x] Replaying the same callback twice has no extra effect.
+- [x] A wrong secret returns 404 and changes nothing (`tests/test_mpesa_callback.py`, `tests/test_mpesa.py`).
+- Late payment: reinstated through a guarded `cancelled → confirmed` transition (only after `payment_expired`, under the booking lock); if the slot was taken, the booking stays cancelled with a `late_payment_refund_due` event and an error log. The shared `apply_result()` in `app/modules/payments/results.py` is what BK-33 reuses.
 
 ### BK-33 · Reconcile stuck payments
 - `payments.reconcile_pending`, run every minute: STK Query for payments pending more than 60 seconds, applying the same result handling as the callback. After 3 minutes with no answer, mark the attempt `timeout`.

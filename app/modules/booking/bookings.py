@@ -254,7 +254,7 @@ class BookingsService:
         start, end = _aware(booking.starts_at), _aware(booking.ends_at)
         await _lock_business_day(self.db, booking.business_id, booking.local_date)
         others = await slots.existing_bookings(ctx, start - timedelta(days=1), end + timedelta(days=1), exclude_id=booking.id)
-        if not availability.staff_can_take(
+        if not availability.booking_fits(
             start=start, end=end, staff_id=staff_id, staff=ctx.staff, bookings=others,
             service_ids=set(service_ids), settings=ctx.settings, now=self.now,
         ):
