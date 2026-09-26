@@ -49,15 +49,21 @@ async def apply_result(
     if raw is not None:
         payment.raw_callback = raw
 
+    confirmed = False
     if result.status == PaymentStatus.SUCCEEDED:
         if result.amount is not None and result.amount != payment.amount:
             logger.error(f"Payment {payment.id}: M-Pesa reports KES {result.amount}, expected {payment.amount}")
-        await _deposit_paid(db, payment, now)
+        confirmed = await _deposit_paid(db, payment, now)
+    booking_id = payment.booking_id
     await db.commit()
+    if confirmed:
+        from app.modules.booking.tasks import notify_confirmed
+        await notify_confirmed(booking_id)
     return payment
 
 
-async def _deposit_paid(db: AsyncSession, payment: Payment, now: datetime) -> None:
+async def _deposit_paid(db: AsyncSession, payment: Payment, now: datetime) -> bool:
+    """Mark the deposit paid on the booking. True if that confirmed it."""
     booking = (
         await db.execute(
             select(Booking).where(Booking.id == payment.booking_id).options(
@@ -70,7 +76,7 @@ async def _deposit_paid(db: AsyncSession, payment: Payment, now: datetime) -> No
 
     if booking.status == BookingStatus.PENDING_PAYMENT:
         transition(booking, BookingStatus.CONFIRMED, reason=reason)
-        return
+        return True
 
     if booking.status == BookingStatus.CANCELLED and booking.cancel_reason == REINSTATABLE_CANCEL_REASON:
         # Paid after the hold ran out: bring it back if nobody took the slot meanwhile.
@@ -78,7 +84,7 @@ async def _deposit_paid(db: AsyncSession, payment: Payment, now: datetime) -> No
         await _lock_business_day(db, booking.business_id, booking.local_date)
         if await _still_fits(db, booking, now):
             transition(booking, BookingStatus.CONFIRMED, reason=f"late_payment {reason}")
-            return
+            return True
         db.add(BookingEvent(
             booking_id=booking.id, from_status=booking.status, to_status=booking.status,
             reason="late_payment_refund_due",
@@ -87,9 +93,10 @@ async def _deposit_paid(db: AsyncSession, payment: Payment, now: datetime) -> No
             f"Booking {booking.reference} was paid ({payment.mpesa_receipt}) after its hold expired and the "
             f"slot was taken: the deposit of KES {payment.amount} needs refunding"
         )
-        return
+        return False
 
     logger.warning(f"Deposit paid for booking {booking.reference} in status {booking.status}; nothing to change")
+    return False
 
 
 async def _still_fits(db: AsyncSession, booking: Booking, now: datetime) -> bool:

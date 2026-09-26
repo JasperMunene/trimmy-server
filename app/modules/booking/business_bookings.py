@@ -205,6 +205,9 @@ class BusinessBookingsService:
         except IntegrityError:
             await self.db.rollback()
             raise _error(409, "slot_unavailable", "This time is no longer available")
+        if booking.status == BookingStatus.CONFIRMED and booking.customer_phone:
+            from app.modules.booking.tasks import notify_confirmed
+            await notify_confirmed(booking.id)  # on-behalf bookings; walk-ins are already here
         return await self.bookings.get_response(booking.id)
 
     # ─── status changes ──────────────────────────────────────

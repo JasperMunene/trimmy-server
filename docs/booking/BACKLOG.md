@@ -27,7 +27,7 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | BK-34 | Deposit and receipt on the booking, per-business deposit totals | M3 | S | BK-32 | | todo |
 | BK-35 | Prove payment routing in production | M3 | S | BK-30 | eslieh | in progress |
 | BK-36 | Payment destinations fit Daraja limits; merge bank lists | M3 | S | — | | todo |
-| BK-40 | Booking confirmation SMS | M4 | S | BK-22 | | todo |
+| BK-40 | Booking confirmation SMS | M4 | S | BK-22 | eslieh | done |
 | BK-41 | Push notification tokens (Expo) | M4 | M | — | | todo |
 | BK-50 | Concurrency test for double-booking | M5 | S | BK-22, BK-05 | | todo |
 | BK-51 | M-Pesa production go-live | M5 | S (weeks of lead time) | BK-01 | | todo |
@@ -227,7 +227,7 @@ Daraja caps `AccountReference` at 12 characters, but the server accepts bank and
 - `booking.send_confirmation` on the `sms` queue, using the existing SMS gateway (`app/modules/auth/sms.py`). Content: business, service, staff, local date and time, deposit paid.
 - Sent when a booking becomes `confirmed`, from either path.
 
-- [ ] Idempotent: a retried task doesn't send twice (record `confirmation_sent_at`).
+- [x] Idempotent: a retried task doesn't send twice (`confirmation_sent_at` is claimed before sending and released if the send fails; migration `011`, `tests/test_confirmation_sms.py`).
 
 ### BK-41 · Push notification tokens (Expo)
 - `POST /me/push-tokens` to register the device's Expo push token, and a `notifications.send_push` task. The first use is the booking confirmation.

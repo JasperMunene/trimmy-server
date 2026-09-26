@@ -222,6 +222,9 @@ class BookingsService:
             logger.warning(f"Booking insert rejected by the database: {e.orig}")
             raise slot_unavailable()
 
+        if booking.status == BookingStatus.CONFIRMED:
+            from app.modules.booking.tasks import notify_confirmed
+            await notify_confirmed(booking.id)
         return await self.get_response(booking.id)
 
     # ─── assigning staff (BK-26) ─────────────────────────────

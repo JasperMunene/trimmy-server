@@ -4,6 +4,16 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-27 · Confirmation SMS (BK-40)
+
+**Why:** customers now get a text when their booking is confirmed. No API change.
+
+- Sent once per booking, to the booking's `customerPhone`, when it becomes `confirmed`: straight away with no deposit, when the deposit is paid, or when the owner books on the customer's behalf. Not for walk-ins.
+- Example: `Trimmy: BK7F3AQ9 confirmed. Glow Beauty Lounge, Classic Haircut with Wanjiku, Mon 5 Oct 14:30. Deposit KES 300 paid.`
+- Booking Confirmed can say "We've sent you an SMS" when the booking has a `customerPhone`.
+
+---
+
 ## 2026-09-27 · Business-side bookings: calendar, walk-ins, on-behalf, status (BK-63)
 
 **Why:** replaces the `USE_MOCK_FULFILLMENT` mocks for Today, Calendar, New appointment and Appointment Detail's status stepper. Bookings made by customers, walk-ins and the owner all appear together.
