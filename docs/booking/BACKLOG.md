@@ -21,7 +21,7 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | BK-25 | Periodic jobs in the worker (`--beat`) | M2 | M | — | eslieh | done |
 | BK-26 | Assign staff to an unassigned booking | M2 | S | BK-22 | eslieh | done |
 | BK-30 | Daraja client with payment routing (port from `payment-routing-test`) | M3 | M | — | eslieh | done |
-| BK-31 | Payments table and `POST /bookings/{id}/payments` | M3 | M | BK-22, BK-30 | | todo |
+| BK-31 | Payments table and `POST /bookings/{id}/payments` | M3 | M | BK-22, BK-30 | eslieh | done |
 | BK-32 | M-Pesa callback endpoint | M3 | M | BK-31 | | todo |
 | BK-33 | Reconcile stuck payments | M3 | S | BK-25, BK-31 | | todo |
 | BK-34 | Deposit and receipt on the booking, per-business deposit totals | M3 | S | BK-32 | | todo |
@@ -179,7 +179,8 @@ A pure function: `(services with quantities, policies) -> { total, deposit | Non
 - The `payments` table (PLAN.md section 4.1). The endpoint accepts `{ phone }`, rejects bookings that aren't `pending_payment` or have expired, calls STK push, stores the attempt and returns `202 { paymentId, status: "pending" }`.
 - Limit retries to 5 attempts per booking and one pending attempt at a time.
 
-- [ ] A Daraja error returns 502 `payment_provider_error`, and the booking stays retryable.
+- [x] A Daraja error returns 502 `payment_provider_error`, and the booking stays retryable (`tests/test_payments.py`).
+- Also: the payment row is written before the push (a crash mid-call still leaves a trace) and records the routing used; the booking's `depositPayment` shows the latest attempt; tests blank all M-Pesa settings so they can never send a real push.
 
 ### BK-32 · M-Pesa callback endpoint
 `POST /payments/mpesa/callback/{secret}`: public, but the secret in the path must match.

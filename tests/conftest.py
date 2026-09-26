@@ -17,6 +17,12 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 # Never touch the real R2 bucket from tests, even though .env configures it.
 os.environ["STORAGE_BACKEND"] = "local"
 os.environ["MEDIA_ROOT"] = tempfile.mkdtemp(prefix="trimmy-test-media-")
+# .env holds production M-Pesa credentials: blank them so no test can ever send a real
+# STK push. Tests that need a provider swap in a fake (see tests/test_payments.py).
+os.environ["MPESA_ENV"] = "sandbox"
+for _name in ("MPESA_CONSUMER_KEY", "MPESA_CONSUMER_SECRET", "MPESA_SHORTCODE", "MPESA_PASSKEY",
+              "MPESA_CALLBACK_URL", "MPESA_CALLBACK_SECRET"):
+    os.environ[_name] = ""
 
 from app.core.base import Base
 from app.core.database import get_db

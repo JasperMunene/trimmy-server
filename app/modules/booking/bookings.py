@@ -20,6 +20,7 @@ from app.modules.booking.models import ACTIVE_STATUSES, Booking, BookingEvent, B
 from app.modules.booking.pricing import DepositPolicy, Line, PricingError, quote_booking
 from app.modules.booking.schemas import (
     BookingLineResponse,
+    DepositPaymentResponse,
     BookingResponse,
     CreateBookingRequest,
     ListBookingsResponse,
@@ -28,6 +29,7 @@ from app.modules.booking.schemas import (
 from app.modules.booking.service import AvailabilityService, _aware
 from app.modules.booking.states import record_created, transition
 from app.modules.business.models import Business, BusinessPolicies, Staff
+from app.modules.payments.models import Payment, PaymentKind
 
 logger = logging.getLogger(__name__)
 
@@ -370,10 +372,24 @@ class BookingsService:
         staff = {
             s.id: s for s in (await self.db.execute(select(Staff).where(Staff.id.in_(staff_ids)))).scalars()
         } if staff_ids else {}
-        return [self._response(b, businesses.get(b.business_id), staff.get(b.staff_id)) for b in bookings]
+        latest_deposit: dict = {}
+        if bookings:
+            payments = await self.db.execute(
+                select(Payment)
+                .where(Payment.booking_id.in_([b.id for b in bookings]), Payment.kind == PaymentKind.DEPOSIT)
+                .order_by(Payment.created_at)
+            )
+            for p in payments.scalars():
+                latest_deposit[p.booking_id] = p  # ordered, so the last one wins
+        return [
+            self._response(b, businesses.get(b.business_id), staff.get(b.staff_id), latest_deposit.get(b.id))
+            for b in bookings
+        ]
 
     @staticmethod
-    def _response(booking: Booking, business: Optional[Business], staff: Optional[Staff]) -> BookingResponse:
+    def _response(
+        booking: Booking, business: Optional[Business], staff: Optional[Staff], deposit: Optional[Payment] = None
+    ) -> BookingResponse:
         tz = ZoneInfo(business.timezone) if business else timezone.utc
         return BookingResponse(
             bookingId=booking.id,
@@ -406,6 +422,12 @@ class BookingsService:
             paymentStatus=booking.payment_status,
             expiresAt=_aware(booking.expires_at) if booking.expires_at else None,
             cancelReason=booking.cancel_reason,
+            depositPayment=(
+                DepositPaymentResponse(paymentId=deposit.id, status=deposit.status, failureReason=deposit.failure_reason)
+                if deposit else None
+            ),
+            paymentReference=deposit.mpesa_receipt if deposit else None,
+            paymentMethod="mpesa" if deposit and deposit.mpesa_receipt else None,
             notes=booking.notes,
             createdAt=_aware(booking.created_at),
         )

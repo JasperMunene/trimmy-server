@@ -4,6 +4,57 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-27 · Pay the deposit by M-Pesa (BK-31)
+
+**Why:** replaces the mocked `confirmBookingPayment`. It's now two steps: start the STK push, then poll the booking. The money goes straight to the business's own till, paybill or bank.
+
+**Replaces → `booking.json#confirm-booking-payment`**
+
+```json
+{
+  "id": "start-booking-payment",
+  "status": "live",
+  "screen": "Payment Method → STK Push Pending",
+  "story": "C2",
+  "method": "POST",
+  "path": "/bookings/{bookingId}/payments",
+  "auth": "the customer who booked",
+  "description": "Sends the M-Pesa prompt for a pending_payment booking's deposit. phone is optional (defaults to the phone on the booking; any Kenyan format). Returns 202 immediately, while the customer enters their PIN. Then poll GET /bookings/{bookingId} every 3 seconds until status is confirmed (paid) or depositPayment.status is failed/timeout; stop after about 2 minutes. On failure the customer can try again (a new prompt) until expiresAt. At most one prompt per 2 minutes and 5 per booking.",
+  "request": { "phone": "0712345678" },
+  "response": {
+    "paymentId": "uuid",
+    "bookingId": "uuid",
+    "status": "pending",
+    "amount": 300,
+    "currency": "KES",
+    "phone": "254712345678",
+    "customerMessage": "Success. Request accepted for processing",
+    "expiresAt": "2026-09-27T10:10:00Z"
+  },
+  "errors": [
+    { "status": 400, "code": "invalid_phone", "message": "Enter a Kenyan mobile number, e.g. 0712 345 678" },
+    { "status": 409, "code": "payment_in_progress", "message": "An M-Pesa prompt was just sent; complete or cancel it on your phone first", "paymentId": "uuid" },
+    { "status": 409, "code": "hold_expired", "message": "This booking's hold ran out; please book again" },
+    { "status": 409, "code": "no_deposit_due", "message": "This booking has no deposit to pay (status confirmed)" },
+    { "status": 409, "code": "already_paid", "message": "The deposit is already paid" },
+    { "status": 409, "code": "business_cannot_take_payments", "message": "This business can't take M-Pesa payments right now" },
+    { "status": 429, "code": "too_many_attempts", "message": "Too many payment attempts for this booking" },
+    { "status": 502, "code": "payment_provider_error", "message": "M-Pesa couldn't send the prompt; please try again" },
+    { "status": 503, "code": "payments_unavailable", "message": "Payments are temporarily unavailable" }
+  ]
+}
+```
+
+**Changed response → `Booking`**: `depositPayment` is now `{ paymentId, status: pending | succeeded | failed | timeout, failureReason }` once a payment has been started. `failureReason` is one of `cancelled` (dismissed the prompt), `insufficient_funds`, `wrong_pin`, `timeout`, `busy` (another M-Pesa transaction in progress), `provider_error`, `failed`. `paymentReference` (the M-Pesa receipt) and `paymentMethod: "mpesa"` are set once it succeeds.
+
+**App code to update**
+
+- `confirmBookingPayment`: call `POST /bookings/{bookingId}/payments` with the phone from Payment Method, then show STK Push Pending and poll `GET /bookings/{bookingId}` as described. The old 402/408 errors become `depositPayment.status` `failed` / `timeout` with a `failureReason` to explain.
+- On `409 payment_in_progress`, keep polling instead of sending a new prompt.
+- **Until BK-32 lands, a payment never shows as succeeded:** the M-Pesa callback is received and logged but not yet applied to the booking. Build the polling against these states; confirmation starts working with BK-32.
+
+---
+
 ## 2026-09-27 · Assign staff to a booking (BK-26)
 
 **Why:** "Any available" bookings are left unassigned (D4); the owner or front desk now gives them to someone. Owner and front-desk apps only.
