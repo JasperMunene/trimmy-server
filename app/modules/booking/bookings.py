@@ -16,7 +16,7 @@ from sqlalchemy.orm import selectinload
 from app.core.config import settings
 from app.modules.auth.models import User
 from app.modules.booking import availability
-from app.modules.booking.models import ACTIVE_STATUSES, Booking, BookingLine, BookingStatus
+from app.modules.booking.models import ACTIVE_STATUSES, Booking, BookingEvent, BookingLine, BookingStatus
 from app.modules.booking.pricing import DepositPolicy, Line, PricingError, quote_booking
 from app.modules.booking.schemas import (
     BookingLineResponse,
@@ -221,6 +221,66 @@ class BookingsService:
             raise slot_unavailable()
 
         return await self.get_response(booking.id)
+
+    # ─── assigning staff (BK-26) ─────────────────────────────
+
+    async def assign_staff(self, user: User, booking_id: str, staff_id: uuid_pkg.UUID) -> BookingResponse:
+        """Give an unassigned ("any available") booking to someone, or reassign it."""
+        not_found = _error(404, "not_found", "No booking found for this id")
+        try:
+            bid = uuid_pkg.UUID(str(booking_id))
+        except ValueError:
+            raise not_found
+        booking = (
+            await self.db.execute(select(Booking).where(Booking.id == bid).options(selectinload(Booking.lines)))
+        ).scalar_one_or_none()
+        if booking is None or not await self._can_view(user, booking):
+            raise not_found
+        if not await self._can_manage(user, booking.business_id):
+            raise _error(403, "forbidden", "Only the owner or front desk can assign staff")
+        if booking.status not in ACTIVE_STATUSES:
+            raise _error(409, "booking_not_active", f"A {booking.status} booking can't be reassigned")
+        if booking.staff_id == staff_id:
+            return await self.get_response(booking.id)
+
+        slots = AvailabilityService(self.db, self.now)
+        service_ids = [line.service_id for line in booking.lines if line.service_id]
+        ctx = await slots.context(str(booking.business_id), service_ids, None, for_existing_booking=True)
+        if not any(s.id == staff_id for s in ctx.staff):
+            raise _error(404, "not_found", "staffId does not exist for this business")
+
+        start, end = _aware(booking.starts_at), _aware(booking.ends_at)
+        await _lock_business_day(self.db, booking.business_id, booking.local_date)
+        others = await slots.existing_bookings(ctx, start - timedelta(days=1), end + timedelta(days=1), exclude_id=booking.id)
+        if not availability.staff_can_take(
+            start=start, end=end, staff_id=staff_id, staff=ctx.staff, bookings=others,
+            service_ids=set(service_ids), settings=ctx.settings, now=self.now,
+        ):
+            await self.db.rollback()
+            raise _error(409, "staff_unavailable", "That staff member can't take this booking: busy, off that day, or doesn't offer the service")
+
+        previous = booking.staff_id
+        booking.staff_id = staff_id
+        self.db.add(BookingEvent(
+            booking_id=booking.id, from_status=booking.status, to_status=booking.status, actor_id=user.id,
+            reason="staff_reassigned" if previous else "staff_assigned",
+        ))
+        try:
+            await self.db.commit()
+        except IntegrityError:
+            await self.db.rollback()
+            raise _error(409, "staff_unavailable", "That staff member is already booked at this time")
+        return await self.get_response(booking.id)
+
+    async def _can_manage(self, user: User, business_id: uuid_pkg.UUID) -> bool:
+        """The owner, or someone working there as front desk."""
+        business = await self.db.get(Business, business_id)
+        if business and business.owner_id == user.id:
+            return True
+        front_desk = await self.db.execute(
+            select(Staff.id).where(Staff.business_id == business_id, Staff.user_id == user.id, Staff.role == "front_desk")
+        )
+        return front_desk.first() is not None
 
     # ─── reading ─────────────────────────────────────────────
 

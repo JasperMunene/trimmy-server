@@ -10,6 +10,7 @@ from app.core.dependencies import get_current_verified_user
 from app.modules.auth.models import User
 from app.modules.booking.bookings import BookingsService
 from app.modules.booking.schemas import (
+    AssignStaffRequest,
     BookingResponse,
     CreateBookingRequest,
     DaySlotsResponse,
@@ -69,6 +70,17 @@ async def get_booking(
 ):
     """For the customer who booked, and the business's owner and staff. Poll this while paying."""
     return await BookingsService(db).get(current_user, booking_id)
+
+
+@bookings_router.patch("/{booking_id}/staff", response_model=BookingResponse)
+async def assign_booking_staff(
+    booking_id: str,
+    data: AssignStaffRequest,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Owner or front desk: assign an "any available" booking to someone, or reassign it."""
+    return await BookingsService(db).assign_staff(current_user, booking_id, data.staff_id)
 
 
 @my_bookings_router.get("/me/bookings", response_model=ListBookingsResponse)

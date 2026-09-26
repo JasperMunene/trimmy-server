@@ -71,6 +71,12 @@ class CreateBookingRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class AssignStaffRequest(BaseModel):
+    staff_id: uuid_pkg.UUID = Field(alias="staffId")
+
+    model_config = {"populate_by_name": True}
+
+
 class BookingLineResponse(BaseModel):
     service_id: Optional[uuid_pkg.UUID] = Field(alias="serviceId")  # null if the service was deleted
     name: str

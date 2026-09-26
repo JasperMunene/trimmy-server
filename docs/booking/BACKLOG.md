@@ -19,7 +19,7 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | BK-23 | `GET /bookings/{id}` and `GET /me/bookings` | M2 | S | BK-20 | eslieh | done |
 | BK-24 | Expire unpaid holds | M2 | S | BK-20, BK-25 | eslieh | done |
 | BK-25 | Periodic jobs in the worker (`--beat`) | M2 | M | — | eslieh | done |
-| BK-26 | Assign staff to an unassigned booking | M2 | S | BK-22 | | todo |
+| BK-26 | Assign staff to an unassigned booking | M2 | S | BK-22 | eslieh | done |
 | BK-30 | Daraja client with payment routing (port from `payment-routing-test`) | M3 | M | — | eslieh | done |
 | BK-31 | Payments table and `POST /bookings/{id}/payments` | M3 | M | BK-22, BK-30 | | todo |
 | BK-32 | M-Pesa callback endpoint | M3 | M | BK-31 | | todo |
@@ -154,8 +154,9 @@ A pure function: `(services with quantities, policies) -> { total, deposit | Non
 ### BK-26 · Assign staff to an unassigned booking
 `PATCH /bookings/{id}/staff` `{ staffId }` for the owner or front desk (D4). The chosen staff member must perform every service on the booking and be free, checked with the availability engine under the same advisory lock as BK-22.
 
-- [ ] Reassigning an already-assigned booking works the same way, and writes a `booking_events` row.
-- [ ] The customer sees the assigned `staffName` on their booking afterwards.
+- [x] Reassigning an already-assigned booking works the same way, and writes a `booking_events` row.
+- [x] The customer sees the assigned `staffName` on their booking afterwards (`tests/test_assign_staff.py`).
+- Note: the owner has no list of the business's bookings yet to find unassigned ones; that's `GET /businesses/{id}/bookings` in BK-63.
 
 ## M3: Deposits (sandbox)
 

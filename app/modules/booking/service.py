@@ -103,8 +103,15 @@ class AvailabilityService:
         )
 
     async def context(
-        self, business_id: str, service_ids: list[uuid_pkg.UUID], staff_id: Optional[uuid_pkg.UUID]
+        self,
+        business_id: str,
+        service_ids: list[uuid_pkg.UUID],
+        staff_id: Optional[uuid_pkg.UUID],
+        *,
+        for_existing_booking: bool = False,
     ) -> "AvailabilityContext":
+        """Load what availability needs. for_existing_booking: the business may have been
+        unpublished and the booking's services deleted since it was made (BK-26)."""
         try:
             bid = uuid_pkg.UUID(str(business_id))
         except ValueError:
@@ -112,7 +119,7 @@ class AvailabilityService:
         business = (
             await self.db.execute(
                 select(Business)
-                .where(Business.id == bid, Business.status == BusinessStatus.PUBLISHED)
+                .where(Business.id == bid, *(() if for_existing_booking else (Business.status == BusinessStatus.PUBLISHED,)))
                 .options(
                     selectinload(Business.working_hours),
                     selectinload(Business.staff),
@@ -124,7 +131,7 @@ class AvailabilityService:
             raise _not_found()
 
         wanted = list(dict.fromkeys(service_ids))
-        if not wanted:
+        if not wanted and not for_existing_booking:
             raise _validation_error("serviceIds is required")
         services = (
             await self.db.execute(select(Service).where(Service.business_id == business.id, Service.id.in_(wanted)))
@@ -177,7 +184,13 @@ class AvailabilityService:
             mapping.setdefault(row.staff_id, []).append(row.service_id)
         return mapping
 
-    async def existing_bookings(self, ctx: "AvailabilityContext", start: datetime, end: datetime) -> list[availability.ExistingBooking]:
+    async def existing_bookings(
+        self,
+        ctx: "AvailabilityContext",
+        start: datetime,
+        end: datetime,
+        exclude_id: Optional[uuid_pkg.UUID] = None,
+    ) -> list[availability.ExistingBooking]:
         """Active bookings that could conflict with slots in [start, end), in one query.
 
         Widened by the buffer on both sides, since a booking's buffer can reach into the window.
@@ -197,7 +210,7 @@ class AvailabilityService:
                 .options(selectinload(Booking.lines))
             )
         ).scalars().all()
-        return [to_existing(b) for b in rows]
+        return [to_existing(b) for b in rows if b.id != exclude_id]
 
 
 def _aware(dt: datetime) -> datetime:

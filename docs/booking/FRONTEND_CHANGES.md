@@ -4,6 +4,39 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-27 · Assign staff to a booking (BK-26)
+
+**Why:** "Any available" bookings are left unassigned (D4); the owner or front desk now gives them to someone. Owner and front-desk apps only.
+
+**New endpoint → `fulfillment.json`**
+
+```json
+{
+  "id": "assign-booking-staff",
+  "status": "live",
+  "screen": "Appointment detail (owner / front desk): Assign staff",
+  "method": "PATCH",
+  "path": "/bookings/{bookingId}/staff",
+  "auth": "the business owner, or its front desk",
+  "description": "Assigns an unassigned booking, or reassigns an assigned one. The staff member must offer every service on the booking, work that weekday, and be free (including room for the business's other unassigned bookings at that time). Only pending_payment, confirmed and in_progress bookings can be (re)assigned.",
+  "request": { "staffId": "uuid" },
+  "response": "Booking (staffId and staffName now set)",
+  "errors": [
+    { "status": 409, "code": "staff_unavailable", "message": "That staff member can't take this booking: busy, off that day, or doesn't offer the service" },
+    { "status": 409, "code": "booking_not_active", "message": "A cancelled booking can't be reassigned" },
+    { "status": 403, "code": "forbidden", "message": "Only the owner or front desk can assign staff" },
+    { "status": 404, "code": "not_found", "message": "No booking found for this id / staffId does not exist for this business" }
+  ]
+}
+```
+
+**App code to update**
+
+- Owner / front-desk booking detail: an "Assign staff" picker when `staffId` is null (and a "Reassign" action otherwise). On `409 staff_unavailable`, keep the picker open and let them choose someone else.
+- Finding unassigned bookings needs the business's booking list (`GET /businesses/{id}/bookings`, BK-63), which isn't built yet.
+
+---
+
 ## 2026-09-27 · Read bookings (BK-23)
 
 **Why:** bookings now live on the server, so My Appointments and Appointment Detail survive a reinstall and work across devices. Replaces `useBookingsStore` as the source of truth.
