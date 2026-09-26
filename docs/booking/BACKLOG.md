@@ -35,7 +35,7 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | BK-60 | Cancel within policy | Next | M | BK-22 | | todo |
 | BK-61 | Reschedule | Next | M | BK-22, BK-11 | | todo |
 | BK-62 | Reminders 24h and 2h before | Next | M | BK-25, BK-40 | | todo |
-| BK-63 | Owner and front-desk bookings (list, walk-in, on-behalf, status) | Next | L | BK-22 | | todo |
+| BK-63 | Owner and front-desk bookings (list, walk-in, on-behalf, status) | Next | L | BK-22 | eslieh | done |
 | BK-64 | No-show marking and fee | Next | S | BK-63 | | todo |
 
 **Start here:** BK-05, BK-21, BK-25, BK-30 and BK-36 have no dependencies and can be picked up now. BK-51 should start on day one because of Safaricom's lead time, and BK-35 follows as soon as it lands: it's the biggest open risk.
@@ -264,6 +264,12 @@ Scheduled per booking by `--beat` (scan for confirmed bookings entering each win
 
 ### BK-63 · Owner and front-desk bookings
 The `fulfillment.json` endpoints: `GET /businesses/{id}/bookings` (calendar), `POST /bookings/walk-in`, `POST /bookings/scheduled`, `PATCH /bookings/{id}/status` through `transition()`.
+
+Done (pulled forward, 2026-09-27; `app/modules/booking/business_bookings.py`, `tests/test_business_bookings.py`):
+- List by day or range (≤ 62 days) with status/staff/unassigned filters; owner and front desk see all, staff only their own.
+- Walk-ins stamped with the current time and started `in_progress`; on-behalf bookings `confirmed`, inside working hours, off-grid allowed; both priced by the server with no deposit, capacity-checked under the booking lock.
+- Status changes with role checks; `no_show` only after the start time (covers the marking half of BK-64; the fee is still open).
+- Completing is allowed through the status endpoint until the charge flow exists.
 
 ### BK-64 · No-show marking and fee
 The business marks `no_show` after the start time; the fee comes from `no_show_fee_percent`, and is recorded for now.

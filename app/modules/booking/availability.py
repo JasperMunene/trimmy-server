@@ -215,6 +215,11 @@ def _opening_window(day: date, weekly_hours: Optional[dict], tz: ZoneInfo) -> Op
     return (opens, closes) if closes > opens else None
 
 
+def opening_window(day: date, weekly_hours: Optional[dict], tz: ZoneInfo) -> Optional[tuple[datetime, datetime]]:
+    """The business's (opens, closes) on `day` in `tz`, or None if closed."""
+    return _opening_window(day, weekly_hours, tz)
+
+
 def _parse_hhmm(value: str) -> time:
     h, m = value.split(":")
     return time(int(h), int(m))

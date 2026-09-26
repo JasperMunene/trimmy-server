@@ -9,9 +9,14 @@ from app.core.database import get_db
 from app.core.dependencies import get_current_verified_user
 from app.modules.auth.models import User
 from app.modules.booking.bookings import BookingsService
+from app.modules.booking.business_bookings import BusinessBookingsService
 from app.modules.booking.schemas import (
     AssignStaffRequest,
     BookingResponse,
+    BusinessBookingsResponse,
+    OwnerBookingRequest,
+    ScheduledBookingRequest,
+    UpdateBookingStatusRequest,
     CreateBookingRequest,
     DaySlotsResponse,
     DaysResponse,
@@ -51,6 +56,44 @@ async def availability_for_day(
     return await AvailabilityService(db).day(business_id, day, service_ids, staff_id)
 
 
+@availability_router.get("/{business_id}/bookings", response_model=BusinessBookingsResponse)
+async def list_business_bookings(
+    business_id: str,
+    day: Optional[date] = Query(None, alias="date", description="One day (Today view)"),
+    start: Optional[date] = Query(None, alias="from", description="Range start (Calendar, Earnings)"),
+    end: Optional[date] = Query(None, alias="to", description="Range end, inclusive; at most 62 days"),
+    status_filter: Optional[str] = Query(None, alias="status", description="Comma-separated, e.g. confirmed,in_progress"),
+    staff_id: Optional[uuid_pkg.UUID] = Query(None, alias="staffId"),
+    unassigned: bool = Query(False, description="Only bookings with no staff assigned"),
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The business's bookings, soonest first. Owner and front desk see all; staff see their own."""
+    return await BusinessBookingsService(db).list(
+        current_user, business_id, day, start, end, status_filter, staff_id, unassigned
+    )
+
+
+@bookings_router.post("/walk-in", status_code=status.HTTP_201_CREATED, response_model=BookingResponse)
+async def create_walk_in_booking(
+    data: OwnerBookingRequest,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Owner or front desk: the customer is here now. Starts in_progress; no deposit."""
+    return await BusinessBookingsService(db).create_walk_in(current_user, data)
+
+
+@bookings_router.post("/scheduled", status_code=status.HTTP_201_CREATED, response_model=BookingResponse)
+async def create_scheduled_booking(
+    data: ScheduledBookingRequest,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Owner or front desk books on a customer's behalf. Starts confirmed; no deposit."""
+    return await BusinessBookingsService(db).create_scheduled(current_user, data)
+
+
 @bookings_router.post("", status_code=status.HTTP_201_CREATED, response_model=BookingResponse)
 async def create_booking(
     data: CreateBookingRequest,
@@ -70,6 +113,18 @@ async def get_booking(
 ):
     """For the customer who booked, and the business's owner and staff. Poll this while paying."""
     return await BookingsService(db).get(current_user, booking_id)
+
+
+@bookings_router.patch("/{booking_id}/status", response_model=BookingResponse)
+async def update_booking_status(
+    booking_id: str,
+    data: UpdateBookingStatusRequest,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Check in (in_progress), complete, mark no-show (after the start time) or cancel.
+    Owner and front desk for any booking; staff can check in and complete their own."""
+    return await BusinessBookingsService(db).update_status(current_user, booking_id, data)
 
 
 @bookings_router.patch("/{booking_id}/staff", response_model=BookingResponse)

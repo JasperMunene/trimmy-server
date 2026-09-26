@@ -138,3 +138,34 @@ class ListBookingsResponse(BaseModel):
     next_cursor: Optional[str] = Field(None, alias="nextCursor")
 
     model_config = {"populate_by_name": True}
+
+
+# ─── Business-side bookings (BK-63) ──────────────────────────
+
+class OwnerBookingRequest(BaseModel):
+    """A booking the business records itself (walk-in or on a customer's behalf). Prices come from the server."""
+
+    business_id: uuid_pkg.UUID = Field(alias="businessId")
+    customer_name: Optional[str] = Field(None, alias="customerName", max_length=100)  # default "Walk-in customer"
+    customer_phone: Optional[str] = Field(None, alias="customerPhone", max_length=32)
+    customer_email: Optional[str] = Field(None, alias="customerEmail", max_length=254)
+    services: List[BookingServiceRequest] = Field(..., min_length=1, max_length=10)
+    staff_id: Optional[uuid_pkg.UUID] = Field(None, alias="staffId")  # null = unassigned
+    notes: Optional[str] = Field(None, max_length=500)
+
+    model_config = {"populate_by_name": True}
+
+
+class ScheduledBookingRequest(OwnerBookingRequest):
+    date: date
+    time: str = Field(..., pattern=r"^([01]\d|2[0-3]):[0-5]\d$", examples=["14:00"])
+
+
+class UpdateBookingStatusRequest(BaseModel):
+    # in_progress = check in / start; completed; no_show; cancelled
+    status: str = Field(..., pattern=r"^(in_progress|completed|no_show|cancelled)$")
+    reason: Optional[str] = Field(None, max_length=100)
+
+
+class BusinessBookingsResponse(BaseModel):
+    bookings: List[BookingResponse]

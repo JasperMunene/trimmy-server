@@ -4,6 +4,85 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-27 · Business-side bookings: calendar, walk-ins, on-behalf, status (BK-63)
+
+**Why:** replaces the `USE_MOCK_FULFILLMENT` mocks for Today, Calendar, New appointment and Appointment Detail's status stepper. Bookings made by customers, walk-ins and the owner all appear together.
+
+**Replaces → `fulfillment.json`** (`list-business-bookings`, `create-walk-in-booking`, `create-scheduled-booking`, `update-booking-status`)
+
+```json
+{
+  "id": "list-business-bookings",
+  "status": "live",
+  "screen": "Today / Calendar / Earnings (business-owner app); Front Desk calendar; Staff My Chair",
+  "method": "GET",
+  "path": "/businesses/{businessId}/bookings?date=2026-09-25 | ?from=2026-09-01&to=2026-09-30 [&status=confirmed,in_progress] [&staffId=uuid] [&unassigned=true]",
+  "auth": "owner or front desk (all bookings); staff (only their own)",
+  "description": "Soonest first. date = one day; from/to = an inclusive range of at most 62 days (one is required). status is comma-separated. unassigned=true lists 'Any available' bookings waiting for someone (see assign-booking-staff).",
+  "response": { "bookings": ["Booking"] },
+  "errors": [
+    { "status": 400, "code": "validation_error", "message": "Pass date, or from and to" },
+    { "status": 404, "code": "not_found", "message": "No business found for this id" }
+  ]
+},
+{
+  "id": "create-walk-in-booking",
+  "status": "live",
+  "method": "POST",
+  "path": "/bookings/walk-in",
+  "auth": "owner or front desk",
+  "description": "The customer is here now: the server stamps the current time, status starts in_progress, no deposit. Prices come from the server. customerName defaults to 'Walk-in customer'. staffId optional (null = unassigned); it must be free right now, else 409.",
+  "request": {
+    "businessId": "uuid", "customerName": "Baraka", "customerPhone": "+254733000111", "customerEmail": null,
+    "services": [{ "serviceId": "uuid", "quantity": 1 }], "staffId": "uuid | null", "notes": null
+  },
+  "response": "Booking (status in_progress, source walk_in)",
+  "errors": [
+    { "status": 409, "code": "slot_unavailable", "message": "This time is no longer available" },
+    { "status": 403, "code": "forbidden", "message": "Only the owner or front desk can do this" }
+  ]
+},
+{
+  "id": "create-scheduled-booking",
+  "status": "live",
+  "method": "POST",
+  "path": "/bookings/scheduled",
+  "auth": "owner or front desk",
+  "description": "Book on a customer's behalf: same body as the walk-in plus date and time. Starts confirmed, no deposit. Must be in the future and inside working hours, but may be off the customer slot grid (e.g. 14:05) and needs no lead time.",
+  "request": { "…": "as create-walk-in-booking", "date": "2026-09-25", "time": "14:00" },
+  "response": "Booking (status confirmed, source walk_in)",
+  "errors": [
+    { "status": 400, "code": "validation_error", "message": "time is not within the business's working hours for that date" },
+    { "status": 400, "code": "validation_error", "message": "time is in the past" },
+    { "status": 409, "code": "slot_unavailable", "message": "This time is no longer available" }
+  ]
+},
+{
+  "id": "update-booking-status",
+  "status": "live",
+  "method": "PATCH",
+  "path": "/bookings/{bookingId}/status",
+  "auth": "owner or front desk; staff can set in_progress and completed on their own bookings",
+  "description": "status: in_progress (check in / start), completed, no_show (only after the start time), cancelled (cancelReason 'business' unless a reason is sent). Returns the full Booking.",
+  "request": { "status": "in_progress", "reason": null },
+  "response": "Booking",
+  "errors": [
+    { "status": 400, "code": "invalid_status_transition", "message": "Cannot move from completed to in_progress" },
+    { "status": 403, "code": "forbidden", "message": "Only the owner or front desk can do this" },
+    { "status": 404, "code": "not_found", "message": "bookingId does not exist" }
+  ]
+}
+```
+
+**App code to update**
+
+- `createWalkInBooking` / `createScheduledBooking` (`src/api/booking.ts`): send `services: [{ serviceId, quantity }]` and drop names, prices, `durationMinutes`, `totalAmount`, `businessName` and `staffName`. `staffId` is `Staff.id` (see BK-02), not the invitation id.
+- Today / Calendar: `GET /businesses/{id}/bookings?date=` or `?from=&to=` instead of the session-only array. Add an "Unassigned" filter using `unassigned=true`, feeding the Assign staff picker (BK-26).
+- Status stepper: `update-booking-status` now returns the whole `Booking`, not just `{ bookingId, status }`. Completing is allowed here until the charge flow (`charge-booking`) exists; then completion should move there.
+- `source` is `walk_in` for both walk-ins and on-behalf bookings, as `fulfillment.json` already says.
+
+---
+
 ## 2026-09-27 · Payments now confirm bookings (BK-32)
 
 **Why:** M-Pesa's result is now applied: a successful deposit confirms the booking. No new endpoints; the polling described under BK-31 starts working end to end.
