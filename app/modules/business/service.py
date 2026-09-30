@@ -240,6 +240,33 @@ def invitations_for(user: User):
     return or_(*matches) if matches else None
 
 
+def business_summary(biz: Business, distance_km: float = 0.0) -> BusinessSummaryResponse:
+    """The search-result card. Needs photos, service_categories.services and reviews loaded."""
+    services = [s for cat in (biz.service_categories or []) for s in (cat.services or [])]
+    reviews = list(biz.reviews or [])
+    loc = biz.location or {}
+    photo_urls = [p.url for p in sorted(biz.photos or [], key=lambda p: (not p.is_cover, p.created_at))]
+    if services:
+        cheapest = min(services, key=lambda s: s.price_amount)
+        starting_price = MoneyResponse(amount=cheapest.price_amount, currency=cheapest.price_currency)
+    else:
+        starting_price = MoneyResponse(amount=0, currency="KES")
+    return BusinessSummaryResponse(
+        businessId=biz.id,
+        name=biz.name,
+        categories=biz.categories or [],
+        thumbnailUrl=photo_urls[0] if photo_urls else "",
+        photos=photo_urls,
+        address=loc.get("address", ""),
+        lat=loc.get("lat", 0.0),
+        lng=loc.get("lng", 0.0),
+        distanceKm=distance_km,
+        startingPrice=starting_price,
+        rating=round(sum(r.rating for r in reviews) / len(reviews), 1) if reviews else 0.0,
+        reviewCount=len(reviews),
+    )
+
+
 def team_member_response(inv: TeamInvitation) -> TeamMemberResponse:
     return TeamMemberResponse(
         invitationId=inv.id,
@@ -1394,30 +1421,7 @@ class BusinessService:
             if has_coords and radius_km is not None and distance > radius_km:
                 continue
 
-            photo_urls = [p.url for p in sorted(
-                biz.photos or [],
-                key=lambda p: (not p.is_cover, p.created_at),
-            )]
-            if services:
-                cheapest = min(services, key=lambda s: s.price_amount)
-                starting_price = MoneyResponse(amount=cheapest.price_amount, currency=cheapest.price_currency)
-            else:
-                starting_price = MoneyResponse(amount=0, currency="KES")
-
-            summary = BusinessSummaryResponse(
-                businessId=biz.id,
-                name=biz.name,
-                categories=biz.categories or [],
-                thumbnailUrl=photo_urls[0] if photo_urls else "",
-                photos=photo_urls,
-                address=loc.get("address", ""),
-                lat=biz_lat,
-                lng=biz_lng,
-                distanceKm=distance,
-                startingPrice=starting_price,
-                rating=rating,
-                reviewCount=len(reviews),
-            )
+            summary = business_summary(biz, distance)
             published_ts = biz.published_at.timestamp() if biz.published_at else 0.0
             rows.append((distance, published_ts, summary))
 

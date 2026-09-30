@@ -4,6 +4,22 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-30 · Favorites (P3)
+
+**Now live → `discovery.json#favorites`**, for any signed-in user.
+
+- `GET /me/favorites` → `{ businesses: [BusinessSummary], staff: [{ staffId, name, businessId, businessName, avatarUrl, role, rating }] }`, newest saved first.
+  - `businesses` use the same shape as `search-businesses` (`distanceKm` is 0, since no location is sent).
+  - `role` and `rating` on staff are extras.
+- `PUT /me/favorites/businesses/{businessId}` and `DELETE …` → `204`. Both are idempotent.
+- `PUT /me/favorites/staff/{staffId}` and `DELETE …` → `204`. Both are idempotent.
+- Saving something that isn't a published business, or a staff member at one, is `404 not_found`.
+- A business that is unpublished later drops out of the list (with its staff) and comes back if it's published again. A deleted business or staff member is removed.
+
+**App code to update:** load the Wishlist from `GET /me/favorites` after login. The heart button calls PUT or DELETE (it can update the screen first, since both are idempotent). Drop the phone-only store.
+
+---
+
 ## 2026-09-30 · Reminder preferences (P3, C5 "configurable")
 
 **New → `auth.json`** (there was no spec, so this is a minimal version): any signed-in user.
