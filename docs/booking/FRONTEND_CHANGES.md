@@ -4,6 +4,23 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-30 · Solo → team switch (P2)
+
+**Fixed → `business-setup.json#set-team-mode` (issues)**. The request and response are unchanged.
+
+1. **The wizard step no longer rewinds.** `PATCH /businesses/{id}/team-mode` only moves `onboardingStep` forward to `team_mode`, and never touches it once the business is published. A published business stays at `review_publish`.
+2. **The owner stays bookable after switching to team.**
+   - Their staff record (created when they published as solo) is kept as it is.
+   - They're still in the profile's `staff[]` and in availability.
+   - Bookings already assigned to them stay theirs.
+   - `/me/businesses` keeps returning their `staffId`, so the app should keep their personal schedule when `staffId` is set, whatever the `teamMode`.
+   - An owner who no longer takes clients can drop out of the schedule with `PUT /businesses/{id}/staff/{staffId}/services` `{ "allServices": false, "serviceIds": [] }`.
+3. **A published team business switching to solo** gets the owner's staff record if it doesn't have one, so there's always someone to book. There's never a duplicate.
+
+`staffId` is still null for an owner who published in team mode and never worked solo. That's unchanged.
+
+---
+
 ## 2026-09-30 · Invitations match by email or phone (P1)
 
 **Fixed → `team.json#list-my-invitations` (issues)** and `respond-to-invitation`. No request or response changes.
