@@ -871,7 +871,18 @@ class BusinessService:
     async def set_team_mode(self, business_id: str, user_id: str, data: SetTeamModeRequest) -> TeamModeResponse:
         business = await self._get_owned_business(business_id, user_id)
         business.team_mode = data.team_mode
-        business.onboarding_step = OnboardingStep.TEAM_MODE
+        # Only moves the wizard forward: switching later (e.g. a published solo business adding its
+        # first team member) mustn't send the owner back into setup.
+        steps = list(OnboardingStep)
+        if business.status != BusinessStatus.PUBLISHED and (
+            business.onboarding_step is None or steps.index(OnboardingStep(business.onboarding_step)) < steps.index(OnboardingStep.TEAM_MODE)
+        ):
+            business.onboarding_step = OnboardingStep.TEAM_MODE
+        # A published business going solo needs the owner bookable. Going to team keeps the
+        # owner's Staff row as it is (still bookable, bookings stay theirs; they can drop out of
+        # the schedule by setting their services to none).
+        if business.status == BusinessStatus.PUBLISHED and data.team_mode == TeamMode.SOLO:
+            await self._ensure_owner_staff(business)
         await self.db.commit()
 
         return TeamModeResponse(
@@ -1172,29 +1183,7 @@ class BusinessService:
                 )
 
             if business.team_mode != TeamMode.TEAM:
-                existing_staff = await self.db.execute(
-                    select(Staff).where(
-                        Staff.business_id == business.id,
-                        Staff.user_id == business.owner_id,
-                    )
-                )
-                if not existing_staff.scalar_one_or_none():
-                    owner = await self.db.get(User, business.owner_id)
-                    owner_name = ""
-                    if owner:
-                        owner_name = " ".join(
-                            p for p in (owner.first_name, owner.last_name) if p
-                        ) or owner.email or "Owner"
-                    self.db.add(
-                        Staff(
-                            business_id=business.id,
-                            user_id=business.owner_id,
-                            name=owner_name or "Owner",
-                            role="owner",
-                            specialties=[],
-                            portfolio=[],
-                        )
-                    )
+                await self._ensure_owner_staff(business)
 
         business.status = BusinessStatus.PUBLISHED if data.visible else BusinessStatus.DRAFT
         business.published_at = datetime.now(timezone.utc) if data.visible else None
@@ -1206,6 +1195,28 @@ class BusinessService:
             status=business.status,
             visible=data.visible,
             publishedAt=business.published_at,
+        )
+
+    async def _ensure_owner_staff(self, business: Business) -> None:
+        """The owner's own Staff row (role "owner"), so a solo business has someone to book."""
+        existing = await self.db.execute(
+            select(Staff.id).where(Staff.business_id == business.id, Staff.user_id == business.owner_id)
+        )
+        if existing.first():
+            return
+        owner = await self.db.get(User, business.owner_id)
+        owner_name = ""
+        if owner:
+            owner_name = " ".join(p for p in (owner.first_name, owner.last_name) if p) or owner.email or "Owner"
+        self.db.add(
+            Staff(
+                business_id=business.id,
+                user_id=business.owner_id,
+                name=owner_name or "Owner",
+                role="owner",
+                specialties=[],
+                portfolio=[],
+            )
         )
 
     # ─── My Businesses ────────────────────────────────────────
