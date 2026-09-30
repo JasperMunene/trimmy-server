@@ -4,6 +4,47 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-30 · Earnings summary (get-earnings-summary)
+
+**Why:** Earnings, Team Member Detail and the staff's own Earnings screens from real paid bookings, replacing `src/utils/earnings.ts`. The server follows that file rule for rule (buckets, labels, sorting, what counts), so the charts look the same.
+
+**Now live → `fulfillment.json#get-earnings-summary`**
+
+- `GET /businesses/{businessId}/earnings?from=2026-10-05&to=2026-10-11[&staffId=uuid][&transactionsLimit=10]`
+- Auth: the owner (whole business, or one person with `staffId`); staff always get their own numbers (`staffId` optional, any other is 403); front desk 403.
+- `from`/`to` are business-local days, inclusive, at most 366 days apart.
+- Every contract field, unchanged: `totalRevenue, completed, noShow, cancelled, avgTicket, buckets[{label, amount}], paymentMethods[{method, amount, count}], services[{serviceId, name, amount, bookingsCount}], transactions[{bookingId, serviceId, date, time, customerName, serviceName, amount, paymentMethod}]`.
+  - Buckets: 3-hour bars for one day ("9 AM"), daily up to 16 days ("Mon"), weekly up to 70 ("Oct 5"), monthly beyond ("Oct"), like the app.
+  - `services` lists every current service (0 rows included), plus any since-deleted service that earned money in the range (`serviceId: null`), sorted by amount then name.
+  - `transactions`: one row per service performed, newest first; `transactionsLimit` returns the newest N (the app's "cap at 10"), and `transactionsTotal` says how many there are.
+
+**Extras in the response** (use or ignore):
+
+```json
+{
+  "currency": "KES", "from": "2026-10-05", "to": "2026-10-11", "timezone": "Africa/Nairobi",
+  "staffId": null, "granularity": "day", "paidBookings": 14, "commission": 4960, "transactionsTotal": 18,
+  "buckets": [{ "label": "Mon", "amount": 1600, "start": "2026-10-05T00:00:00+03:00", "end": "2026-10-06T00:00:00+03:00", "bookingsCount": 2 }],
+  "staff": [{ "staffId": "uuid | null", "name": "Wanjiku | Unassigned", "amount": 8000, "bookingsCount": 10, "commission": 3200 }],
+  "money": {
+    "depositsCollected": 1500, "cancellationFees": 300, "refundsDue": 500, "refundsPaid": 0,
+    "collected": [{ "method": "mpesa", "kind": "deposit | charge", "amount": 9600, "count": 11 }]
+  },
+  "previous": { "from": "2026-09-28", "to": "2026-10-04", "totalRevenue": 10000, "completed": 12, "avgTicket": 833, "revenueChangePercent": 24.0 }
+}
+```
+
+- `staff` is the per-person breakdown on the whole-business view (empty when scoped to one person). `commission` is the scoped person's, or everyone's.
+- `previous` is the same-length period just before `from`, for "+24% vs last week"; `revenueChangePercent` is null when that period earned nothing.
+- `money` covers what isn't sales: deposits taken, cancellation fees kept, refunds still owed or paid back, and every successful payment by method and kind.
+
+**App code to update**
+
+- Replace `getEarningsBuckets` / `getPaymentMethodBreakdown` / `getServicesBreakdown` / `getTransactionLines` / `getAppointmentStats` with one call per screen and range. Presets: send the same from/to the app computes today (Today = one day, Week = last 7 days, and so on).
+- Team Member Detail: `staffId=<member's staffId>`. Staff's own Earnings: no `staffId` needed.
+
+---
+
 ## 2026-09-30 · Payouts (request-payout, list-business-payouts, respond-to-payout) + balance
 
 **Why:** staff wallets (S3) and the owner's payout queue (O4), from real paid bookings. Trimmy never moves this money: "approve" records that the owner paid the staff member themselves.
