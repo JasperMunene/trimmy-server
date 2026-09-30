@@ -162,3 +162,57 @@ async def test_failed_send_is_released_for_a_retry(salon, customer, db_session, 
         await TASKS["booking.send_reminder"].run({"booking_id": str(booking_id), "kind": "24h"})
     db_session.expire_all()
     assert (await db_session.get(Booking, booking_id)).reminder_24h_sent_at is None
+
+
+# ─── Preferences ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_preferences_default_on_and_patch_only_changes_what_is_sent(client, customer):
+    _, h = customer
+    url = "/api/v1/me/notification-preferences"
+    everything = {"dayBefore": True, "twoHoursBefore": True, "sms": True, "push": True}
+    assert (await client.get(url, headers=h)).json() == {"reminders": everything}
+    resp = await client.patch(url, json={"reminders": {"dayBefore": False}}, headers=h)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["reminders"] == {**everything, "dayBefore": False}
+    again = await client.patch(url, json={"reminders": {"sms": False}}, headers=h)
+    assert again.json()["reminders"] == {**everything, "dayBefore": False, "sms": False}
+    assert (await client.get(url)).status_code == 401
+
+
+@pytest.fixture
+def pushed(monkeypatch):
+    calls = []
+
+    async def record(booking_id, kind):
+        calls.append(kind)
+
+    monkeypatch.setattr(booking_tasks, "push_update", record)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_turned_off_reminder_is_not_sent(client, salon, customer, db_session, outbox, pushed):
+    user, h = customer
+    await client.patch("/api/v1/me/notification-preferences", json={"reminders": {"dayBefore": False}}, headers=h)
+    booking_id = await upcoming(db_session, salon, user.id, 23 * H)
+    await scan()
+    assert (outbox, pushed) == ([], [])
+    db_session.expire_all()
+    assert (await db_session.get(Booking, booking_id)).reminder_24h_sent_at is not None  # not retried
+
+
+@pytest.mark.asyncio
+async def test_channels(client, salon, customer, db_session, outbox, pushed):
+    user, h = customer
+    url = "/api/v1/me/notification-preferences"
+    await client.patch(url, json={"reminders": {"sms": False}}, headers=h)
+    await upcoming(db_session, salon, user.id, 23 * H)
+    await scan()
+    assert (outbox, pushed) == ([], ["reminder_24h"])
+
+    await client.patch(url, json={"reminders": {"sms": True, "push": False}}, headers=h)
+    await upcoming(db_session, salon, user.id, 90 * timedelta(minutes=1))
+    await scan()
+    assert len(outbox) == 1 and pushed == ["reminder_24h"]

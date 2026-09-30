@@ -4,6 +4,39 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-30 · Reminder preferences (P3, C5 "configurable")
+
+**New → `auth.json`** (there was no spec, so this is a minimal version): any signed-in user.
+
+```json
+{
+  "id": "get-notification-preferences",
+  "status": "live",
+  "screen": "Profile → Notification Preferences",
+  "method": "GET",
+  "path": "/me/notification-preferences",
+  "response": { "reminders": { "dayBefore": true, "twoHoursBefore": true, "sms": true, "push": true } }
+},
+{
+  "id": "update-notification-preferences",
+  "status": "live",
+  "method": "PATCH",
+  "path": "/me/notification-preferences",
+  "description": "Only the fields sent change. Returns the full preferences.",
+  "request": { "reminders": { "dayBefore": false } },
+  "response": { "reminders": { "dayBefore": false, "twoHoursBefore": true, "sms": true, "push": true } }
+}
+```
+
+- Everything is on until the customer changes something.
+- `dayBefore` / `twoHoursBefore` turn each BK-62 reminder on or off. `sms` / `push` pick how reminders are sent.
+- These settings only affect **reminders**. Booking confirmations, cancellations by the business and other alerts are always sent.
+- A reminder that is turned off is skipped for that booking. Turning it back on doesn't resend a reminder that was already due.
+
+**App code to update:** a Notification Preferences screen with four switches: "Day before", "2 hours before", "By SMS" and "By push notification".
+
+---
+
 ## 2026-09-30 · Solo → team switch (P2)
 
 **Fixed → `business-setup.json#set-team-mode` (issues)**. The request and response are unchanged.

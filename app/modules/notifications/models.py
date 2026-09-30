@@ -1,7 +1,7 @@
 import uuid as uuid_pkg
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.base import Base
@@ -23,3 +23,16 @@ class PushToken(Base):
     platform: Mapped[str] = mapped_column(String(10), nullable=False)  # ios | android
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+
+class NotificationPreferences(Base):
+    """A customer's reminder settings (C5 "configurable"). No row = everything on."""
+
+    __tablename__ = "notification_preferences"
+
+    user_id: Mapped[uuid_pkg.UUID] = mapped_column(UUID, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    reminder_24h: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    reminder_2h: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    reminder_sms: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    reminder_push: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
