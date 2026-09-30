@@ -4,6 +4,20 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-30 · Bookings by customer (P3)
+
+**Changed → `fulfillment.json#list-business-bookings` (issues)**: two new filters for Customer Detail's appointment history. With either, no `date` or `from`/`to` is needed, and results come **newest first**.
+
+- `GET /businesses/{businessId}/bookings?customerId=uuid`: `customerId` is the id from `list-customers`. It matches that customer's bookings by phone, or by email for a customer saved without a phone. A customer with neither gets `[]`.
+- `GET /businesses/{businessId}/bookings?phone=0722000111`: accepts a phone in any format. `400 invalid_phone` if it isn't a real number.
+- Works with `status=` (e.g. `status=completed`) and `limit=` (1–200, default 200).
+- Every source is included: online bookings, walk-ins and bookings made on the customer's behalf.
+- Same auth as before: owner / front desk see everything, and staff see only their own bookings with that customer. An unknown `customerId` is `404 not_found`.
+
+**App code to update:** Customer Detail → load the history with `?customerId=<customerId>` instead of the bookings cached on the device.
+
+---
+
 ## 2026-09-30 · Favorites (P3)
 
 **Now live → `discovery.json#favorites`**, for any signed-in user.
