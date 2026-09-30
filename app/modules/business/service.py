@@ -5,11 +5,12 @@ from math import asin, cos, radians, sin, sqrt
 from typing import Optional
 import uuid as uuid_pkg
 from fastapi import HTTPException, UploadFile
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
+from app.core.phone_utils import InvalidPhoneNumberError, normalise_phone
 from app.core.storage import IMAGE_TYPES, DirectUploadUnsupported, get_storage, sniff_image
 from app.modules.auth.models import User
 from app.modules.business.models import (
@@ -211,6 +212,32 @@ def booking_settings_response(b: Business) -> BookingSettingsResponse:
         minLeadMinutes=b.min_lead_minutes,
         maxDaysAhead=b.max_days_ahead,
     )
+
+
+def invite_email(raw: Optional[str]) -> Optional[str]:
+    """Emails are matched case-insensitively."""
+    return (raw or "").strip().lower() or None
+
+
+def invite_phone(raw: Optional[str]) -> Optional[str]:
+    """E.164 when it's a real number, so "0722 000 111" matches "+254722000111"; otherwise as typed."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        return normalise_phone(raw)
+    except InvalidPhoneNumberError:
+        return raw
+
+
+def invitations_for(user: User):
+    """Pending-invitation filter for this user: their (verified) email or their phone."""
+    matches = []
+    if invite_email(user.email):
+        matches.append(func.lower(TeamInvitation.email) == invite_email(user.email))
+    if invite_phone(user.phone):
+        matches.append(TeamInvitation.phone.in_({user.phone, invite_phone(user.phone)}))
+    return or_(*matches) if matches else None
 
 
 def team_member_response(inv: TeamInvitation) -> TeamMemberResponse:
@@ -863,13 +890,14 @@ class BusinessService:
     async def _create_invitation(
         self, business: Business, user_id: str, data: InviteTeamMemberRequest, **member_fields
     ) -> TeamInvitation:
-        if not data.email and not data.phone:
+        email, phone = invite_email(data.email), invite_phone(data.phone)
+        if not email and not phone:
             raise _validation_error("email or phone is required")
 
-        for field, value in (("email", data.email), ("phone", data.phone)):
+        for field, value in (("email", email), ("phone", phone)):
             if not value:
                 continue
-            column = getattr(TeamInvitation, field)
+            column = func.lower(TeamInvitation.email) if field == "email" else TeamInvitation.phone
             clash = (
                 await self.db.execute(
                     select(TeamInvitation.status).where(
@@ -892,8 +920,8 @@ class BusinessService:
 
         invitation = TeamInvitation(
             business_id=business.id,
-            email=data.email,
-            phone=data.phone,
+            email=email,
+            phone=phone,
             role=data.role,
             status=InvitationStatus.PENDING,
             invited_by=user_id,
@@ -1223,14 +1251,12 @@ class BusinessService:
     async def list_my_invitations(self, user_id: str):
         from app.modules.business.schemas import ListMyInvitationsResponse, MyInvitationResponse
         user = await self.db.get(User, user_id)
-        if not user or not user.phone:
+        mine = invitations_for(user) if user else None
+        if mine is None:
             return ListMyInvitationsResponse(invitations=[])
         result = await self.db.execute(
             select(TeamInvitation)
-            .where(
-                TeamInvitation.status == InvitationStatus.PENDING,
-                TeamInvitation.phone == user.phone,
-            )
+            .where(TeamInvitation.status == InvitationStatus.PENDING, mine)
             .order_by(TeamInvitation.sent_at.desc())
         )
         invitations = result.scalars().all()
@@ -1255,7 +1281,10 @@ class BusinessService:
         if invitation.status != InvitationStatus.PENDING:
             raise HTTPException(status_code=409, detail={"error": "already_responded", "message": "This invitation has already been accepted or declined"})
         user = await self.db.get(User, user_id)
-        if not user or not user.phone or user.phone != invitation.phone:
+        mine = invitations_for(user) if user else None
+        if mine is None or not (
+            await self.db.execute(select(TeamInvitation.id).where(TeamInvitation.id == invitation.id, mine))
+        ).first():
             raise HTTPException(status_code=404, detail={"error": "not_found", "message": "No pending invitation found for this id"})
         if data.action == "accept":
             invitation.status = InvitationStatus.ACCEPTED

@@ -4,6 +4,21 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-30 · Invitations match by email or phone (P1)
+
+**Fixed → `team.json#list-my-invitations` (issues)** and `respond-to-invitation`. No request or response changes.
+
+- A pending invitation now reaches the signed-in (verified) user when **either** its email or its phone matches theirs.
+- Emails are compared case-insensitively. Phones are compared in E.164, so `0722 000 111` on the invite matches `+254722000111` on the account.
+- So email invites work, and Google users with no phone see theirs. They show up as soon as the person registers and verifies, or signs in with Google.
+- Invites are stored normalised: a lowercase email and an E.164 phone (an invalid phone is kept as typed). Existing invites were normalised too (migration `021`).
+- The duplicate checks (`409 already_invited` / `already_member`) now compare across formats, so a number typed differently can't be invited twice.
+- Only the person an invite matches can accept it. Anyone else gets `404`.
+
+**App code to update:** drop the "add a phone number to see invitations" prompt.
+
+---
+
 ## 2026-09-30 · Reviews (P2)
 
 **Now live → `booking.json#create-review`**: `POST /bookings/{bookingId}/review` `{ "rating": 1-5, "text"?: "Great fade" }` → `201`.
