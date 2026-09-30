@@ -4,6 +4,17 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-30 · Reminders by SMS (BK-62)
+
+**Why:** C5 "reminders before my appointment". No API change; reminders go by SMS now, and push can be added once push tokens (BK-41) exist.
+
+- **Day before:** once the booking is 24h away, if it was booked at least a day ahead. e.g. `Trimmy reminder: Glow Beauty, Classic Haircut with Wanjiku, tomorrow 14:30. Ref BK7F3AQ9. To change it, open the Trimmy app.`
+- **2 hours before:** with a map link when the business has coordinates. e.g. `Trimmy: see you at 14:30 at Glow Beauty (Classic Haircut). Ref BK7F3AQ9. Directions: https://maps.google.com/?q=-1.29,36.78`
+- Only for `confirmed` bookings with a `customerPhone`; each once per booking. Rescheduling resets them for the new time; cancelled and unpaid bookings get none.
+- Not built yet: the customer's reminder preferences (C5 "configurable", Notification Preferences). Every confirmed customer gets both for now.
+
+---
+
 ## 2026-09-30 · Reschedule (BK-61)
 
 **Why:** C3 "manage my appointments": move an appointment instead of cancelling and rebooking.

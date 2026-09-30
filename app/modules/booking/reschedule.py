@@ -106,7 +106,8 @@ class RescheduleService:
         booking.ends_at = new_end.astimezone(timezone.utc)
         booking.local_date, booking.local_time = data.date, data.time
         booking.staff_id = staff_id
-        booking.confirmation_sent_at = None  # the new time gets its own SMS
+        booking.confirmation_sent_at = None  # the new time gets its own SMS...
+        booking.reminder_24h_sent_at = booking.reminder_2h_sent_at = None  # ...and its own reminders
         booking.events.append(BookingEvent(
             from_status=booking.status, to_status=booking.status, actor_id=user.id,
             reason=f"rescheduled from {old_label}"[:100],

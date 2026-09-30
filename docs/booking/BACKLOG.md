@@ -34,7 +34,7 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | BK-52 | Contract hand-off to the app team | M5 | S | BK-22, BK-31 | | todo |
 | BK-60 | Cancel within policy | Next | M | BK-22 | eslieh | done |
 | BK-61 | Reschedule | Next | M | BK-22, BK-11 | eslieh | done |
-| BK-62 | Reminders 24h and 2h before | Next | M | BK-25, BK-40 | | todo |
+| BK-62 | Reminders 24h and 2h before | Next | M | BK-25, BK-40 | eslieh | done |
 | BK-63 | Owner and front-desk bookings (list, walk-in, on-behalf, status) | Next | L | BK-22 | eslieh | done |
 | BK-64 | No-show marking and fee | Next | S | BK-63 | | todo |
 
@@ -265,6 +265,8 @@ Done (2026-09-30; `app/modules/booking/reschedule.py`, `tests/test_reschedule.py
 
 ### BK-62 · Reminders 24h and 2h before
 Scheduled per booking by `--beat` (scan for confirmed bookings entering each window), idempotent per booking and window. Respect the customer's notification preferences once those exist.
+
+Done (2026-09-30; `app/modules/booking/tasks.py`, `tests/test_reminders.py`, migration `015`): `booking.scan_reminders` every 5 minutes queues `booking.send_reminder` per booking; each window is claimed before sending and released if the send fails; 24h only if booked a day ahead and more than 2h remain; 2h with a map link; reschedule resets both. Not done: preferences (no settings screen on the server yet) and push (BK-41).
 
 ### BK-63 · Owner and front-desk bookings
 The `fulfillment.json` endpoints: `GET /businesses/{id}/bookings` (calendar), `POST /bookings/walk-in`, `POST /bookings/scheduled`, `PATCH /bookings/{id}/status` through `transition()`.
