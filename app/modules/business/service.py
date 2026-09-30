@@ -1284,6 +1284,9 @@ class BusinessService:
                     role=invitation.role,
                     specialties=[],
                     portfolio=[],
+                    # Front desk isn't bookable until the owner gives them services
+                    # (PUT /businesses/{id}/staff/{staffId}/services).
+                    performs_all_services=invitation.role != "front_desk",
                 )
                 self.db.add(staff)
             # Staff becomes this member's bookable identity (docs/booking/PLAN.md, D3).

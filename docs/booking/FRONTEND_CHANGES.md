@@ -4,6 +4,18 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-30 · Front desk: confirmed, and no longer bookable
+
+**Answers → `fulfillment.json#frontDeskNote`:**
+
+- **Yes, the public profile lists every accepted staff member**, with or without ratings or photos (`staff[]` is every staff record at the business, including front desk and a solo owner). Each has `role`, `allServices`, `serviceIds` and `workingDays`, so the front desk app can build its staff and service pickers from it.
+- **Yes, front desk can call every endpoint marked "owner or front desk"**, now covered by a test: business bookings (all filters incl. `unassigned` and `refund=due`), walk-in, scheduled, assign staff, status changes, reschedule, charge, customers (list and save), mark refunded, day summary and submit. Owner-only stays owner-only: earnings, team management, staff services (set), business settings, payouts approval.
+- Note: the profile only exists for **published** businesses.
+
+**Fixed:** accepting a **front desk** invite used to make them "perform every service", so customers could book the front desk and availability counted them as capacity. Front desk now start with **no services** (`allServices: false`, `serviceIds: []`): not bookable, hidden by Select Staff. The owner can still give a front desk person services with `set-staff-services`. Existing front desk records were switched too (migration `019`), unless the owner had already set their services.
+
+---
+
 ## 2026-09-30 · Day summary and submit to owner (F4)
 
 **Now live → `fulfillment.json#get-day-summary` and `#submit-day-summary`**, owner or front desk.
