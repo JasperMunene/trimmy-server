@@ -98,7 +98,7 @@ class PaymentsService:
                     account_reference=booking.reference, status=PaymentStatus.SUCCEEDED, settled_at=self.now,
                 ))
             await self.db.refresh(booking, ["events"])
-            mark_charged(booking, reason="cash" if balance else "nothing_due", actor_id=user.id)
+            await mark_charged(self.db, booking, reason="cash" if balance else "nothing_due", actor_id=user.id)
             await self.db.commit()
             return 200, await BookingsService(self.db, self.now).get_response(booking.id)
 
@@ -190,10 +190,17 @@ class PaymentsService:
         )
 
 
-def mark_charged(booking: Booking, *, reason: str, actor_id=None) -> None:
-    """The balance is settled: complete the visit and mark it paid. The caller commits."""
+async def mark_charged(db: AsyncSession, booking: Booking, *, reason: str, actor_id=None) -> None:
+    """The balance is settled: complete the visit, mark it paid, and fix the staff
+    member's commission on it (payouts). The caller commits."""
+    import math
+
     from app.modules.booking.states import transition
+    from app.modules.business.models import Staff
 
     booking.payment_status = BookingPaymentStatus.PAID
+    staff = await db.get(Staff, booking.staff_id) if booking.staff_id else None
+    if staff is not None and staff.commission_percent:
+        booking.staff_commission = math.floor(booking.total_amount * staff.commission_percent / 100)
     if booking.status == BookingStatus.IN_PROGRESS:
         transition(booking, BookingStatus.COMPLETED, actor_id=actor_id, reason=f"charged: {reason}"[:100])

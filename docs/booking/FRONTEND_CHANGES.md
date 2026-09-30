@@ -4,6 +4,67 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-30 · Payouts (request-payout, list-business-payouts, respond-to-payout) + balance
+
+**Why:** staff wallets (S3) and the owner's payout queue (O4), from real paid bookings. Trimmy never moves this money: "approve" records that the owner paid the staff member themselves.
+
+**Changed contract → keyed by `staffId`, not `invitationId`** (BK-02). `invitationId` is gone from requests and responses.
+
+```json
+{
+  "id": "request-payout",
+  "status": "live",
+  "method": "POST",
+  "path": "/payouts",
+  "auth": "staff (for themselves only)",
+  "description": "staffId is optional and defaults to the caller's own staff record at businessId; any other staffId is 403. amount must be ≤ the available balance, checked on the server. Always comes back pending.",
+  "request": { "businessId": "uuid", "staffId": "uuid (optional)", "amount": 320 },
+  "response": { "payoutId": "uuid", "businessId": "uuid", "staffId": "uuid", "staffName": "Wanjiku", "amount": 320, "currency": "KES", "status": "pending", "requestedAt": "…", "respondedAt": null, "rejectionReason": null },
+  "errors": [
+    { "status": 409, "code": "insufficient_balance", "message": "Amount exceeds available wallet balance (KES 120)" },
+    { "status": 403, "code": "forbidden", "message": "You can only request payouts for yourself" },
+    { "status": 404, "code": "not_found", "message": "You don't work at this business" }
+  ]
+},
+{
+  "id": "list-business-payouts",
+  "status": "live",
+  "method": "GET",
+  "path": "/businesses/{businessId}/payouts?status=pending&staffId=uuid",
+  "auth": "owner (everyone's); staff (their own)",
+  "response": { "payouts": ["Payout"] }
+},
+{
+  "id": "respond-to-payout",
+  "status": "live",
+  "method": "POST",
+  "path": "/payouts/{payoutId}/respond",
+  "auth": "owner",
+  "request": { "action": "approve | reject", "rejectionReason": "only kept for reject" },
+  "response": "Payout (status paid | rejected, respondedAt set)",
+  "errors": [{ "status": 409, "code": "already_responded", "message": "This payout has already been approved or rejected" }]
+},
+{
+  "id": "get-payout-balance",
+  "status": "live (new)",
+  "screen": "Staff Earnings (wallet); owner Member Detail",
+  "method": "GET",
+  "path": "/me/payouts/balance?businessId=uuid  |  /businesses/{businessId}/staff/{staffId}/payout-balance",
+  "auth": "/me: the staff member; /businesses/…: the owner, or that staff member",
+  "description": "earned = commission on paid bookings; available = earned - pending - paid. Commission is fixed on each booking when it's paid (total x the staff member's commissionPercent at that moment), so changing someone's rate only affects later bookings. Unassigned bookings earn no commission.",
+  "response": { "businessId": "uuid", "staffId": "uuid", "currency": "KES", "earned": 320, "pending": 200, "paid": 0, "available": 120, "commissionPercent": 40 }
+}
+```
+
+**App code to update**
+
+- `types/payout.ts`: `invitationId` → `staffId`, plus `staffName`.
+- Staff wallet: show `available` from the balance endpoint instead of computing it client-side; the server re-checks every request anyway.
+- Owner Team tab: `list-business-payouts?status=pending` for the queue; Member Detail can show that person's balance.
+- Earnings only count once bookings are paid through charge-booking (above), so flip `USE_MOCK_CHARGE` off first.
+
+---
+
 ## 2026-09-30 · Customers (save-customer, list-customers)
 
 **Why:** the Customers screen and New appointment's customer picker, from real data. Flip `USE_MOCK_CUSTOMERS` off.

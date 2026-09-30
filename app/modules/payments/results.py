@@ -81,7 +81,7 @@ async def _charge_paid(db: AsyncSession, payment: Payment) -> None:
             f"(KES {payment.amount}) arrived; refund due"
         )
         return
-    mark_charged(booking, reason=f"mpesa:{payment.mpesa_receipt}" if payment.mpesa_receipt else "mpesa")
+    await mark_charged(db, booking, reason=f"mpesa:{payment.mpesa_receipt}" if payment.mpesa_receipt else "mpesa")
 
 
 async def _deposit_paid(db: AsyncSession, payment: Payment, now: datetime) -> bool:

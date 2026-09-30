@@ -104,6 +104,9 @@ class Booking(Base):
     refund_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # due | refunded
     refunded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     refund_reference: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # The assigned staff member's commission on this booking, fixed when it's paid
+    # (total x their commission percent then), so later rate changes don't rewrite it.
+    staff_commission: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # Set when the confirmation SMS is claimed for sending (BK-40), so it goes out once.
     confirmation_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
