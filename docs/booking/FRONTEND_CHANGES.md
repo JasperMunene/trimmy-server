@@ -4,6 +4,14 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-30 · Charge a completed-but-unpaid visit (P1)
+
+**Answers → `fulfillment.json#charge-booking` issue (P1):** option (a). `charge-booking` now accepts a booking that is `in_progress` **or** `completed` and not yet `paid`. Staff can keep finishing their own appointments with `update-booking-status`; the owner / front desk charges it afterwards, and it then counts toward earnings and the staff member's commission. Cancelled, no-show and pending bookings still get `409 not_in_progress` (message now "Only an in-progress or completed appointment can be charged").
+
+**App code to update:** offer "Charge customer" on a completed booking whenever `paymentStatus !== "paid"` (i.e. `balanceDue.amount > 0`).
+
+---
+
 ## 2026-09-30 · No-show fee (BK-64)
 
 **Why:** when the business marks a booking `no_show`, the owner and the customer both see what the no-show cost.

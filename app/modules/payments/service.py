@@ -86,8 +86,10 @@ class PaymentsService:
             raise _error(403, "forbidden", "Only the owner or front desk can do this")
         if booking.payment_status == BookingPaymentStatus.PAID:
             raise _error(409, "already_paid", "This appointment is already paid")
-        if booking.status != BookingStatus.IN_PROGRESS:
-            raise _error(409, "not_in_progress", "Only an in-progress appointment can be charged")
+        # A visit someone already marked completed (e.g. staff finishing their own) can still be
+        # charged afterwards, so it isn't left unpaid and missing from earnings and commission.
+        if booking.status not in (BookingStatus.IN_PROGRESS, BookingStatus.COMPLETED):
+            raise _error(409, "not_in_progress", "Only an in-progress or completed appointment can be charged")
 
         balance = max(booking.total_amount - deposit_paid(booking), 0)
         if method == "cash" or balance == 0:
