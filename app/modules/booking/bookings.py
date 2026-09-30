@@ -248,6 +248,8 @@ class BookingsService:
         else:
             record_created(booking, BookingStatus.CONFIRMED, actor_id=customer.id)
         self.db.add(booking)
+        from app.modules.customers.service import remember_customer
+        await remember_customer(self.db, business.id, booking.customer_name, booking.customer_phone, booking.customer_email)
 
         try:
             await self.db.commit()

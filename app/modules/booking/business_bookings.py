@@ -188,6 +188,9 @@ class BusinessBookingsService:
             await self.db.rollback()
             raise _error(409, "slot_unavailable", "This time is no longer available")
 
+        from app.modules.customers.service import clean_phone, remember_customer
+
+        phone = clean_phone(data.customer_phone)
         booking = Booking(
             id=uuid_pkg.uuid4(),
             business_id=ctx.business.id,
@@ -201,7 +204,7 @@ class BusinessBookingsService:
             total_amount=quote.total,
             currency=quote.currency,
             customer_name=(data.customer_name or "").strip() or WALK_IN_NAME,
-            customer_phone=data.customer_phone,
+            customer_phone=phone,
             customer_email=data.customer_email,
             notes=data.notes,
         )
@@ -211,6 +214,7 @@ class BusinessBookingsService:
                 service_id=sid, position=position, name=service.name,
                 duration_minutes=service.duration_minutes, price_amount=service.price_amount, quantity=qty,
             ))
+        await remember_customer(self.db, ctx.business.id, booking.customer_name, phone, booking.customer_email)
         record_created(
             booking, BookingStatus.IN_PROGRESS if starts_at is None else BookingStatus.CONFIRMED,
             actor_id=user.id, reason="walk_in" if starts_at is None else "scheduled_by_business",

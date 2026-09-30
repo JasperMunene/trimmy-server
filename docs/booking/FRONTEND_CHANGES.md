@@ -4,6 +4,26 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-30 · Customers (save-customer, list-customers)
+
+**Why:** the Customers screen and New appointment's customer picker, from real data. Flip `USE_MOCK_CUSTOMERS` off.
+
+**Now live → `fulfillment.json#save-customer` and `#list-customers`** (owner or front desk)
+
+- The list fills itself: every booking with a phone (customer bookings, walk-ins, on-behalf) adds or refreshes that person, deduplicated by phone in any format (`0722 000 111` = `+254722000111`). Existing bookings were backfilled. The app doesn't need to call save-customer after a booking.
+- `GET /businesses/{businessId}/customers?query=&limit=100&offset=0` → `{ customers: [Customer], total }`, A–Z. `query` searches name, email and phone digits. limit 1–500.
+- `POST /businesses/{businessId}/customers` `{ customerId?, name, phone?, email? }` → `Customer`. With `customerId`: updates it. Without: updates whoever already has that phone, otherwise creates. Customers without a phone are allowed (not deduplicated).
+- `Customer` = `{ customerId, businessId, name, phone (E.164), email, createdAt, bookingsCount, lastBookingAt }`. The last two are new: bookings with that phone, cancelled ones excluded.
+- Errors: `400 invalid_phone`, `409 phone_taken` (updating to a phone another customer has), `404 not_found`, `403 forbidden` (staff).
+
+**Behaviour change → `create-walk-in-booking` / `create-scheduled-booking`**: `customerPhone` is now normalised to E.164 and must be a valid number (`400 invalid_phone` otherwise).
+
+**App code to update**
+
+- `useCustomersStore`: load from `list-customers` instead of session-only data; the client-side dedupe-by-phone before `save-customer` is no longer needed (the server does it).
+
+---
+
 ## 2026-09-30 · Charge at checkout (charge-booking)
 
 **Why:** the last step of a visit. Until now no booking ever became `paid` on the server, so earnings, commission and payouts had nothing real to count. Flip `USE_MOCK_CHARGE` off.
