@@ -488,6 +488,13 @@ class BookingsService:
         staff = {
             s.id: s for s in (await self.db.execute(select(Staff).where(Staff.id.in_(staff_ids)))).scalars()
         } if staff_ids else {}
+        from app.modules.booking.reviews import review_response
+        from app.modules.business.models import Review
+
+        reviews: dict = {}
+        if bookings:
+            for r in (await self.db.execute(select(Review).where(Review.booking_id.in_([b.id for b in bookings])))).scalars():
+                reviews[r.booking_id] = review_response(r)
         latest_deposit: dict = {}
         latest_charge: dict = {}
         if bookings:
@@ -496,12 +503,15 @@ class BookingsService:
             )
             for p in payments.scalars():  # ordered, so the last of each kind wins
                 (latest_charge if p.kind == PaymentKind.CHARGE else latest_deposit)[p.booking_id] = p
-        return [
+        responses = [
             self._response(
                 b, businesses.get(b.business_id), staff.get(b.staff_id), latest_deposit.get(b.id), latest_charge.get(b.id)
             )
             for b in bookings
         ]
+        for response in responses:
+            response.review = reviews.get(response.booking_id)
+        return responses
 
     @staticmethod
     def _response(
