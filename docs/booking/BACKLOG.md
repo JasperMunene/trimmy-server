@@ -28,7 +28,7 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | BK-35 | Prove payment routing in production | M3 | S | BK-30 | eslieh | in progress |
 | BK-36 | Payment destinations fit Daraja limits; merge bank lists | M3 | S | — | | todo |
 | BK-40 | Booking confirmation SMS | M4 | S | BK-22 | eslieh | done |
-| BK-41 | Push notification tokens (Expo) | M4 | M | — | | todo |
+| BK-41 | Push notification tokens (Expo) | M4 | M | — | eslieh | done |
 | BK-50 | Concurrency test for double-booking | M5 | S | BK-22, BK-05 | | todo |
 | BK-51 | M-Pesa production go-live | M5 | S (weeks of lead time) | BK-01 | | todo |
 | BK-52 | Contract hand-off to the app team | M5 | S | BK-22, BK-31 | | todo |
@@ -232,7 +232,7 @@ Daraja caps `AccountReference` at 12 characters, but the server accepts bank and
 ### BK-41 · Push notification tokens (Expo)
 - `POST /me/push-tokens` to register the device's Expo push token, and a `notifications.send_push` task. The first use is the booking confirmation.
 
-- [ ] Invalid tokens reported by Expo are deleted.
+- [x] Invalid tokens reported by Expo are deleted (`app/modules/notifications/`, `tests/test_push.py`, migration `017`). Pushes: booking confirmed / cancelled by business / reminders (customer), assigned (staff), payout responded (staff).
 
 ## M5: Go-live
 

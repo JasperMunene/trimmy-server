@@ -260,9 +260,11 @@ class BookingsService:
             logger.warning(f"Booking insert rejected by the database: {e.orig}")
             raise slot_unavailable()
 
+        from app.modules.booking import tasks as booking_tasks
         if booking.status == BookingStatus.CONFIRMED:
-            from app.modules.booking.tasks import notify_confirmed
-            await notify_confirmed(booking.id)
+            await booking_tasks.notify_confirmed(booking.id)
+        if booking.staff_id:
+            await booking_tasks.push_update(booking.id, "assigned")
         return await self.get_response(booking.id)
 
     # ─── cancelling (BK-60) ──────────────────────────────────
@@ -384,6 +386,8 @@ class BookingsService:
         except IntegrityError:
             await self.db.rollback()
             raise _error(409, "staff_unavailable", "That staff member is already booked at this time")
+        from app.modules.booking import tasks as booking_tasks
+        await booking_tasks.push_update(booking.id, "assigned")
         return await self.get_response(booking.id)
 
     async def _can_manage(self, user: User, business_id: uuid_pkg.UUID) -> bool:

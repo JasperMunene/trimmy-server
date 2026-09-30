@@ -118,7 +118,9 @@ class RescheduleService:
             await self.db.rollback()
             raise _error(409, "slot_unavailable", "The selected time is no longer available")
 
+        from app.modules.booking import tasks as booking_tasks
         if booking.status == BookingStatus.CONFIRMED:
-            from app.modules.booking.tasks import notify_confirmed
-            await notify_confirmed(booking.id)
+            await booking_tasks.notify_confirmed(booking.id)
+        if booking.staff_id:
+            await booking_tasks.push_update(booking.id, "assigned")  # the (possibly new) staff member
         return await BookingsService(self.db, self.now).get_response(booking.id)

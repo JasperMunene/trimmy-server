@@ -4,6 +4,33 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-30 · Push notifications (BK-41)
+
+**Now live → `auth.json#register-push-token`**, as specified, plus the logout call.
+
+- `POST /me/push-tokens` `{ "token": "ExponentPushToken[…]", "platform": "ios" | "android" }` → `{ "ok": true }`. Any signed-in user; idempotent. If another account registers the same token (someone else signs in on that phone), it moves to them. `400 invalid_token` if it isn't an Expo token.
+- `DELETE /me/push-tokens/{token}` → `204`, on logout. Idempotent; only removes your own.
+- Tokens Expo reports as `DeviceNotRegistered` are deleted automatically.
+
+**What gets pushed** (every notification's `data` has `type` plus the ids to open):
+
+| `data.type` | To | When | `data` |
+| --- | --- | --- | --- |
+| `booking_confirmed` | customer | booking confirmed (no deposit / deposit paid / booked on their behalf / rescheduled) | `bookingId`, `businessId` |
+| `booking_cancelled_by_business` | customer | the business cancelled it | `bookingId`, `businessId` |
+| `booking_reminder_24h`, `booking_reminder_2h` | customer | the BK-62 reminders | `bookingId`, `businessId` |
+| `booking_assigned` | staff | a booking made with them, or (re)assigned to them | `bookingId`, `businessId` |
+| `payout_responded` | staff | their payout approved or declined | `payoutId`, `businessId` |
+
+The owner's "day summary submitted" push comes with the day-summary endpoints (next).
+
+**App code to update**
+
+- After login (all roles): get the Expo token and `POST /me/push-tokens`; on logout `DELETE /me/push-tokens/{token}`.
+- Notification tap: route on `data.type` → Appointment Detail (`bookingId`) or Payout Detail (`payoutId`).
+
+---
+
 ## 2026-09-30 · Staff see their own services (P1)
 
 **Now live → `team.json#get-my-staff-services`**, as specified: `GET /me/staff-services?businessId=uuid` for the staff member or front desk themselves.

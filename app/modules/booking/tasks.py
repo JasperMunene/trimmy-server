@@ -93,11 +93,12 @@ async def send_booking_confirmation(booking_id: str, db: AsyncSession) -> None:
 
 
 async def notify_confirmed(booking_id: uuid_pkg.UUID) -> None:
-    """Queue the confirmation SMS; call after the commit that confirmed the booking."""
+    """Queue the confirmation SMS and push; call after the commit that confirmed the booking."""
     try:
         await send_booking_confirmation.enqueue(booking_id=str(booking_id))
     except Exception as e:  # never fail the request over a notification
         logger.error(f"Could not queue confirmation for booking {booking_id}: {e}")
+    await push_update(booking_id, "confirmed")
 
 
 # ─── Reminders (BK-62) ───────────────────────────────────────
@@ -237,3 +238,67 @@ async def send_booking_reminder(booking_id: str, kind: str, db: AsyncSession) ->
         await db.execute(update(Booking).where(Booking.id == bid).values({column.key: None}))
         await db.commit()
         raise
+    await push_update(bid, f"reminder_{kind}")
+
+
+# ─── Push notifications about a booking (BK-41) ──────────────
+
+PUSH_KINDS = ("confirmed", "cancelled_by_business", "reminder_24h", "reminder_2h", "assigned")
+
+
+@task("booking.push_update", queue="default", max_retries=3)
+async def push_booking_update(booking_id: str, kind: str, db: AsyncSession) -> None:
+    """Push one booking event to the right person: the customer, or for "assigned" the staff member."""
+    from sqlalchemy import delete, select
+    from sqlalchemy.orm import selectinload
+    from zoneinfo import ZoneInfo
+
+    from app.modules.booking.models import Booking
+    from app.modules.business.models import Business, Staff
+    from app.modules.notifications.models import PushToken
+    from app.modules.notifications.push import message, send_expo
+
+    if kind not in PUSH_KINDS:
+        raise PermanentError(f"Unknown push kind {kind!r}")
+    booking = (
+        await db.execute(select(Booking).where(Booking.id == uuid_pkg.UUID(booking_id)).options(selectinload(Booking.lines)))
+    ).scalar_one_or_none()
+    if booking is None:
+        return
+    business = await db.get(Business, booking.business_id)
+    staff = await db.get(Staff, booking.staff_id) if booking.staff_id else None
+    tz = ZoneInfo(business.timezone if business else "Africa/Nairobi")
+    starts = (booking.starts_at if booking.starts_at.tzinfo else booking.starts_at.replace(tzinfo=timezone.utc)).astimezone(tz)
+    when = starts.strftime("%a %-d %b %H:%M")
+    what = _what([line.name for line in booking.lines])
+    name = business.name if business else "your salon"
+
+    recipient = booking.customer_id
+    if kind == "confirmed":
+        title, body = "Booking confirmed", f"{name}: {what}, {when}. Ref {booking.reference}."
+    elif kind == "cancelled_by_business":
+        title, body = "Booking cancelled", f"{name} cancelled your {what} on {when}."
+    elif kind == "reminder_24h":
+        title, body = "See you tomorrow", f"{what} at {name}, {when}."
+    elif kind == "reminder_2h":
+        title, body = "Coming up soon", f"{what} at {name} at {starts.strftime('%H:%M')}."
+    else:  # assigned: tell the staff member
+        recipient = staff.user_id if staff else None
+        title, body = "New booking", f"{what} with {booking.customer_name}, {when}."
+    if recipient is None:
+        return
+
+    tokens = (await db.execute(select(PushToken.token).where(PushToken.user_id == recipient))).scalars().all()
+    data = {"type": f"booking_{kind}", "bookingId": str(booking.id), "businessId": str(booking.business_id)}
+    dead = await send_expo([message(t, title, body, data) for t in tokens])
+    if dead:
+        await db.execute(delete(PushToken).where(PushToken.token.in_(dead)))
+        await db.commit()
+
+
+async def push_update(booking_id: uuid_pkg.UUID, kind: str) -> None:
+    """Queue a booking push; never fails the caller."""
+    try:
+        await push_booking_update.enqueue(booking_id=str(booking_id), kind=kind)
+    except Exception as e:
+        logger.error(f"Could not queue {kind} push for booking {booking_id}: {e}")

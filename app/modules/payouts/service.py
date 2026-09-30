@@ -159,4 +159,15 @@ class PayoutsService:
         payout.responded_by, payout.responded_at = user.id, self.now
         await self.db.commit()
         await self.db.refresh(payout)
+
+        staff = await self.db.get(Staff, payout.staff_id) if payout.staff_id else None
+        if staff is not None and staff.user_id:
+            from app.modules.notifications.tasks import notify
+            approved = payout.status == PayoutStatus.PAID
+            await notify(
+                staff.user_id,
+                "Payout approved" if approved else "Payout declined",
+                f"KES {payout.amount:,} " + ("marked as paid by the owner." if approved else f"not approved{': ' + payout.rejection_reason if payout.rejection_reason else '.'}"),
+                type="payout_responded", payoutId=payout.id, businessId=payout.business_id,
+            )
         return _response(payout)

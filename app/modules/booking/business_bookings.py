@@ -225,9 +225,11 @@ class BusinessBookingsService:
         except IntegrityError:
             await self.db.rollback()
             raise _error(409, "slot_unavailable", "This time is no longer available")
+        from app.modules.booking import tasks as booking_tasks
         if booking.status == BookingStatus.CONFIRMED and booking.customer_phone:
-            from app.modules.booking.tasks import notify_confirmed
-            await notify_confirmed(booking.id)  # on-behalf bookings; walk-ins are already here
+            await booking_tasks.notify_confirmed(booking.id)  # on-behalf bookings; walk-ins are already here
+        if booking.staff_id:
+            await booking_tasks.push_update(booking.id, "assigned")
         return await self.bookings.get_response(booking.id)
 
     # ─── status changes ──────────────────────────────────────
@@ -263,6 +265,9 @@ class BusinessBookingsService:
         elif data.status == BookingStatus.NO_SHOW:
             await self._apply_no_show_fee(booking)
         await self.db.commit()
+        if data.status == BookingStatus.CANCELLED:
+            from app.modules.booking.tasks import push_update
+            await push_update(booking.id, "cancelled_by_business")
         return await self.bookings.get_response(booking.id)
 
     async def _apply_no_show_fee(self, booking: Booking) -> None:
