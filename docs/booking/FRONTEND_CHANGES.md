@@ -4,6 +4,20 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-30 · Staff see their own services (P1)
+
+**Now live → `team.json#get-my-staff-services`**, as specified: `GET /me/staff-services?businessId=uuid` for the staff member or front desk themselves.
+
+```json
+{ "staffId": "uuid", "allServices": false,
+  "services": [{ "serviceId": "uuid", "name": "Classic Haircut", "durationMinutes": 45, "price": { "amount": 800, "currency": "KES" } }] }
+```
+
+- `allServices: true` → `services` lists every service the business offers (so "My services" always has something concrete to show).
+- `404 not_found` "You don't work at this business" if the caller has no staff record there.
+
+---
+
 ## 2026-09-30 · Charge a completed-but-unpaid visit (P1)
 
 **Answers → `fulfillment.json#charge-booking` issue (P1):** option (a). `charge-booking` now accepts a booking that is `in_progress` **or** `completed` and not yet `paid`. Staff can keep finishing their own appointments with `update-booking-status`; the owner / front desk charges it afterwards, and it then counts toward earnings and the staff member's commission. Cancelled, no-show and pending bookings still get `409 not_in_progress` (message now "Only an in-progress or completed appointment can be charged").

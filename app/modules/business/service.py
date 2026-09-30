@@ -956,6 +956,33 @@ class BusinessService:
             mapping[row.staff_id].append(row.service_id)
         return mapping
 
+    async def my_staff_services(self, user_id: uuid_pkg.UUID, business_id: str):
+        """The caller's own services at business_id, with names and prices (staff / front desk)."""
+        from app.modules.business.schemas import MyStaffServiceItem, MyStaffServicesResponse
+
+        bid = self._parse_path_id(business_id, "businessId")
+        staff = (
+            await self.db.execute(select(Staff).where(Staff.business_id == bid, Staff.user_id == user_id))
+        ).scalars().first()
+        if staff is None:
+            raise HTTPException(status_code=404, detail={"error": "not_found", "message": "You don't work at this business"})
+        query = select(Service).where(Service.business_id == bid).order_by(Service.name)
+        if not staff.performs_all_services:
+            mapped = (await self.staff_service_ids([staff.id]))[staff.id]
+            query = query.where(Service.id.in_(mapped or [uuid_pkg.uuid4()]))  # none mapped: no rows
+        services = (await self.db.execute(query)).scalars().all()
+        return MyStaffServicesResponse(
+            staffId=staff.id,
+            allServices=staff.performs_all_services,
+            services=[
+                MyStaffServiceItem(
+                    serviceId=s.id, name=s.name, durationMinutes=s.duration_minutes,
+                    price=MoneyResponse(amount=s.price_amount, currency=s.price_currency),
+                )
+                for s in services
+            ],
+        )
+
     async def get_staff_services(self, business_id: str, user_id: str, staff_id: str) -> StaffServicesResponse:
         business = await self._get_owned_business(business_id, user_id)
         staff = await self._get_staff(business, staff_id)
