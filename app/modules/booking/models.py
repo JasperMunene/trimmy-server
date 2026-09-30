@@ -104,6 +104,11 @@ class Booking(Base):
     refund_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # due | refunded
     refunded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     refund_reference: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # No-show fee (BK-64): the part taken from the paid deposit, and the rest of the fee
+    # the deposit didn't cover (there's no card on file to charge it to).
+    no_show_fee: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    no_show_fee_uncollected: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    no_show_fee_percent: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # The assigned staff member's commission on this booking, fixed when it's paid
     # (total x their commission percent then), so later rate changes don't rewrite it.
     staff_commission: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

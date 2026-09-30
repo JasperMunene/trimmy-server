@@ -61,3 +61,18 @@ def outcome(
         fee=fee,
         refund=deposit_paid - fee,
     )
+
+
+@dataclass(frozen=True)
+class NoShowOutcome:
+    fee: int  # the whole fee the policy asks for
+    kept: int  # taken from the paid deposit
+    uncollected: int  # the rest of the fee, which the deposit didn't cover
+    refund: int  # what's left of the deposit, owed back
+
+
+def no_show_outcome(*, total: int, deposit_paid: int, fee_percent: int) -> NoShowOutcome:
+    """No-show fee (BK-64): fee_percent of the total, taken from the paid deposit and capped at it."""
+    fee = math.ceil(total * fee_percent / 100)
+    kept = min(fee, deposit_paid)
+    return NoShowOutcome(fee=fee, kept=kept, uncollected=fee - kept, refund=deposit_paid - kept)

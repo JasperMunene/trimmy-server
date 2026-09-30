@@ -116,6 +116,7 @@ class EarningsService:
             money={
                 "depositsCollected": current.deposits_collected,
                 "cancellationFees": current.cancellation_fees,
+                "noShowFees": current.no_show_fees,
                 "refundsDue": current.refunds_due,
                 "refundsPaid": current.refunds_paid,
                 "collected": current.collected,
@@ -183,6 +184,7 @@ class EarningsService:
                 commission=b.staff_commission or 0,
                 deposit_paid=deposit_paid(b),
                 cancellation_fee=b.cancellation_fee or 0,
+                no_show_fee=b.no_show_fee or 0,
                 refund_amount=b.refund_amount or 0,
                 refund_status=b.refund_status,
             )

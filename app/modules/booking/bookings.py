@@ -29,6 +29,7 @@ from app.modules.booking.pricing import DepositPolicy, Line, PricingError, quote
 from app.modules.booking.schemas import (
     BookingLineResponse,
     CancelPreviewResponse,
+    NoShowFeeResponse,
     RefundResponse,
     DepositPaymentResponse,
     BookingResponse,
@@ -544,6 +545,15 @@ class BookingsService:
             ),
             paymentReference=_settling(deposit, charge)[1],
             cancellationFee=Money(amount=booking.cancellation_fee, currency=booking.currency) if booking.cancellation_fee else None,
+            noShowFee=(
+                NoShowFeeResponse(
+                    percent=booking.no_show_fee_percent,
+                    fee=Money(amount=(booking.no_show_fee or 0) + (booking.no_show_fee_uncollected or 0), currency=booking.currency),
+                    kept=Money(amount=booking.no_show_fee or 0, currency=booking.currency),
+                    uncollected=Money(amount=booking.no_show_fee_uncollected or 0, currency=booking.currency),
+                )
+                if booking.no_show_fee_percent is not None else None
+            ),
             refund=(
                 RefundResponse(
                     amount=Money(amount=booking.refund_amount or 0, currency=booking.currency),

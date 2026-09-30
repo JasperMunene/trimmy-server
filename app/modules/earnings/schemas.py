@@ -65,6 +65,7 @@ class MoneyResponse(BaseModel):
 
     deposits_collected: int = Field(alias="depositsCollected")
     cancellation_fees: int = Field(alias="cancellationFees")  # kept from cancelled bookings' deposits
+    no_show_fees: int = Field(alias="noShowFees")  # kept from no-shows' deposits
     refunds_due: int = Field(alias="refundsDue")  # the business still owes these back
     refunds_paid: int = Field(alias="refundsPaid")
     collected: List[CollectedRow]  # every successful payment, by method and kind

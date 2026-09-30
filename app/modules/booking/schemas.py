@@ -97,6 +97,17 @@ class DepositPaymentResponse(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class NoShowFeeResponse(BaseModel):
+    """The no-show fee (BK-64). Only the deposit can be kept; the rest is informational."""
+
+    percent: int  # the business's no-show fee percent when it was applied
+    fee: Money  # the whole fee: percent of the booking total
+    kept: Money  # taken from the paid deposit
+    uncollected: Money  # the part the deposit didn't cover
+
+    model_config = {"populate_by_name": True}
+
+
 class RefundResponse(BaseModel):
     """Money the business owes back after a cancellation (D10: refunded by hand)."""
 
@@ -143,6 +154,8 @@ class BookingResponse(BaseModel):
     charge_payment: Optional[DepositPaymentResponse] = Field(None, alias="chargePayment")
     # Set when a cancellation kept part of the deposit, or left a refund owed (BK-60).
     cancellation_fee: Optional[Money] = Field(None, alias="cancellationFee")
+    # Set once the business marks the booking a no-show.
+    no_show_fee: Optional[NoShowFeeResponse] = Field(None, alias="noShowFee")
     refund: Optional[RefundResponse] = None
     notes: Optional[str] = None
     created_at: datetime = Field(alias="createdAt")

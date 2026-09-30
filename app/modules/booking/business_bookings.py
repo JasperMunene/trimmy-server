@@ -260,8 +260,26 @@ class BusinessBookingsService:
         if data.status == BookingStatus.CANCELLED:
             # The business called it off: the whole paid deposit goes back (D10).
             record_refund(booking, fee=0, refund=deposit_paid(booking))
+        elif data.status == BookingStatus.NO_SHOW:
+            await self._apply_no_show_fee(booking)
         await self.db.commit()
         return await self.bookings.get_response(booking.id)
+
+    async def _apply_no_show_fee(self, booking: Booking) -> None:
+        """Keep the policy's no-show fee from the paid deposit (BK-64); refund what's left."""
+        from app.modules.booking.cancellation import no_show_outcome
+        from app.modules.business.models import BusinessPolicies
+
+        policies = (
+            await self.db.execute(select(BusinessPolicies).where(BusinessPolicies.business_id == booking.business_id))
+        ).scalar_one_or_none()
+        percent = policies.no_show_fee_percent if policies else 100
+        result = no_show_outcome(total=booking.total_amount, deposit_paid=deposit_paid(booking), fee_percent=percent)
+        booking.no_show_fee_percent = percent
+        booking.no_show_fee = result.kept
+        booking.no_show_fee_uncollected = result.uncollected
+        if result.refund > 0:
+            booking.refund_amount, booking.refund_status = result.refund, RefundStatus.DUE
 
     # ─── refunds (BK-60, D10) ────────────────────────────────
 

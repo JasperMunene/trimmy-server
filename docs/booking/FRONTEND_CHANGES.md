@@ -4,6 +4,37 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-30 · No-show fee (BK-64)
+
+**Why:** when the business marks a booking `no_show`, the owner and the customer both see what the no-show cost.
+
+**How it's worked out:** the business's `noShow.feePercent` (default 100%) of the booking total. There's no card on file, so only a paid deposit can be kept: the fee comes out of the deposit, capped at it. Anything left of the deposit is refunded (a `refund` owed, as in BK-60), and the part of the fee the deposit didn't cover is shown as `uncollected`.
+
+**Changed response → `Booking`**: a new `noShowFee`, null unless the booking was marked no-show.
+
+```json
+{
+  "noShowFee": {
+    "percent": 100,
+    "fee": { "amount": 800, "currency": "KES" },
+    "kept": { "amount": 300, "currency": "KES" },
+    "uncollected": { "amount": 500, "currency": "KES" }
+  }
+}
+```
+
+- 25% fee on an 800 booking with a 300 deposit: `fee` 200, `kept` 200, `uncollected` 0, and a `refund` of 100 due.
+- No deposit: `kept` 0, `uncollected` = the whole fee.
+
+**Changed → `fulfillment.json#get-earnings-summary`**: `money.noShowFees` = fees kept from no-shows' deposits in the range (not in `totalRevenue`).
+
+**App code to update**
+
+- Appointment Detail (owner and customer) for a `no_show`: "No-show fee: KES 300 kept from your deposit" (+ "KES 500 not collected" for the owner), and the refund line when `refund` is set.
+- The customer's "No-show notice" (C5) can use `noShowFee.percent` to explain the policy.
+
+---
+
 ## 2026-09-30 · Reminders by SMS (BK-62)
 
 **Why:** C5 "reminders before my appointment". No API change; reminders go by SMS now, and push can be added once push tokens (BK-41) exist.
