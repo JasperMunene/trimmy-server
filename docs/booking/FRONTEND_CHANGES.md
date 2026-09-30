@@ -4,6 +4,28 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-30 · staffId in GET /me/businesses
+
+**Why:** staff and front desk can get into their app after accepting an invite (no more testing shortcut): the app needs their `staffId` for My Chair, earnings, payouts and status changes.
+
+**Changed response → `auth.json#my-businesses`** (`GET /me/businesses`): each entry gains `staffId`.
+
+```json
+{ "businesses": [
+  { "businessId": "uuid", "name": "Fade Studio", "status": "published", "role": "owner", "staffId": "uuid | null" },
+  { "businessId": "uuid", "name": "Cuts Co", "status": "published", "role": "front_desk | staff", "staffId": "uuid" }
+] }
+```
+
+- `staff` / `front_desk`: always set, the same id as the roster's `staffId` and the profile's `staff[].staffId`.
+- `owner`: set when the owner takes appointments themselves (a solo business, once published); null for a team-mode owner who doesn't.
+
+**App code to update**
+
+- Post-login routing: `role` picks the app (owner / front desk / staff); keep `staffId` for the session and use it for `GET /businesses/{id}/bookings` (staff see their own), `/me/payouts/balance`, earnings and status updates.
+
+---
+
 ## 2026-09-30 · Earnings summary (get-earnings-summary)
 
 **Why:** Earnings, Team Member Detail and the staff's own Earnings screens from real paid bookings, replacing `src/utils/earnings.ts`. The server follows that file rule for rule (buckets, labels, sorting, what counts), so the charts look the same.

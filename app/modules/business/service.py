@@ -1162,25 +1162,32 @@ class BusinessService:
             .where(Business.owner_id == user_id)
             .order_by(Business.created_at.asc())
         )
-        items = [
-            MyBusinessResponse(businessId=b.id, name=b.name, status=b.status, role="owner")
-            for b in owned.scalars()
-        ]
-        owned_ids = {item.business_id for item in items}
+        owned_businesses = owned.scalars().all()
+        memberships = (
+            await self.db.execute(
+                select(Staff, Business)
+                .join(Business, Business.id == Staff.business_id)
+                .where(Staff.user_id == user_id)
+                .order_by(Staff.created_at.asc())
+            )
+        ).all()
+        # Owners also get a Staff row (role "owner") on their own business when they work solo.
+        my_staff = {business.id: staff for staff, business in memberships}
 
-        memberships = await self.db.execute(
-            select(Staff, Business)
-            .join(Business, Business.id == Staff.business_id)
-            .where(Staff.user_id == user_id)
-            .order_by(Staff.created_at.asc())
-        )
-        for staff, business in memberships.all():
-            # Owners also get a Staff row (role "owner") on their own business when it's published.
-            if business.id in owned_ids:
+        items = [
+            MyBusinessResponse(
+                businessId=b.id, name=b.name, status=b.status, role="owner",
+                staffId=my_staff[b.id].id if b.id in my_staff else None,
+            )
+            for b in owned_businesses
+        ]
+        seen = {item.business_id for item in items}
+        for staff, business in memberships:
+            if business.id in seen:
                 continue
-            owned_ids.add(business.id)
+            seen.add(business.id)
             items.append(MyBusinessResponse(
-                businessId=business.id, name=business.name, status=business.status, role=staff.role,
+                businessId=business.id, name=business.name, status=business.status, role=staff.role, staffId=staff.id,
             ))
         return ListMyBusinessesResponse(businesses=items)
 
