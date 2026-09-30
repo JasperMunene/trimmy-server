@@ -4,6 +4,28 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-30 · Reviews (P2)
+
+**Now live → `booking.json#create-review`**: `POST /bookings/{bookingId}/review` `{ "rating": 1-5, "text"?: "Great fade" }` → `201`.
+
+```json
+{ "reviewId": "uuid", "authorName": "Amina W", "rating": 5, "text": "Great fade", "createdAt": "2026-10-05T16:10:00Z" }
+```
+
+- Only the customer who booked, only once the booking is `completed`, once per booking. `text` is optional (max 1000 chars).
+- `authorName` is the customer's first name and last initial.
+- The review shows straight away in the business profile's `reviews` (newest first) and counts toward the business's `rating` / `reviewCount`. The staff member's `rating` becomes the average of their reviews.
+- Errors: `409 not_completed` ("You can review once the appointment is done"), `409 already_reviewed`, `404 not_found` (not your booking), `422` for a rating outside 1-5.
+
+**Changed response → `Booking`**: new `review`, `{ reviewId, authorName, rating, text, createdAt }` or null.
+
+**App code to update**
+
+- Appointment Detail / Past tab: show "Leave a review" when `status === "completed"` and `review === null`; otherwise show their review.
+- After a successful post, put the response into the booking's `review` (or refetch the booking).
+
+---
+
 ## 2026-09-30 · Front desk: confirmed, and no longer bookable
 
 **Answers → `fulfillment.json#frontDeskNote`:**

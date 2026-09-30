@@ -308,6 +308,13 @@ class Review(Base):
     staff_id: Mapped[Optional[uuid_pkg.UUID]] = mapped_column(
         UUID, ForeignKey("staff.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # The booking it's about (one review per booking) and who wrote it; null for older rows.
+    booking_id: Mapped[Optional[uuid_pkg.UUID]] = mapped_column(
+        UUID, ForeignKey("bookings.id", ondelete="SET NULL"), nullable=True, unique=True
+    )
+    customer_id: Mapped[Optional[uuid_pkg.UUID]] = mapped_column(
+        UUID, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     author_name: Mapped[str] = mapped_column(Text, nullable=False)
     rating: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

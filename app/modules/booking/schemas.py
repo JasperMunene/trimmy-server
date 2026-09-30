@@ -108,6 +108,18 @@ class NoShowFeeResponse(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class BookingReviewResponse(BaseModel):
+    """booking.json#create-review response, and Booking.review once written."""
+
+    review_id: uuid_pkg.UUID = Field(alias="reviewId")
+    author_name: str = Field(alias="authorName")
+    rating: int
+    text: Optional[str] = None
+    created_at: datetime = Field(alias="createdAt")
+
+    model_config = {"populate_by_name": True}
+
+
 class RefundResponse(BaseModel):
     """Money the business owes back after a cancellation (D10: refunded by hand)."""
 
@@ -154,6 +166,8 @@ class BookingResponse(BaseModel):
     charge_payment: Optional[DepositPaymentResponse] = Field(None, alias="chargePayment")
     # Set when a cancellation kept part of the deposit, or left a refund owed (BK-60).
     cancellation_fee: Optional[Money] = Field(None, alias="cancellationFee")
+    # The customer's review of this visit; null until written (offer it once status is completed).
+    review: Optional[BookingReviewResponse] = None
     # Set once the business marks the booking a no-show.
     no_show_fee: Optional[NoShowFeeResponse] = Field(None, alias="noShowFee")
     refund: Optional[RefundResponse] = None
@@ -238,3 +252,9 @@ class RescheduleRequest(BaseModel):
     staff_id: Optional[uuid_pkg.UUID] = Field(None, alias="staffId")
 
     model_config = {"populate_by_name": True}
+
+
+
+class CreateReviewRequest(BaseModel):
+    rating: int = Field(..., ge=1, le=5)
+    text: Optional[str] = Field(None, max_length=1000)
