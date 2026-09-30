@@ -200,6 +200,7 @@ async def send_booking_reminder(booking_id: str, kind: str, db: AsyncSession) ->
     from app.modules.auth.sms import deliver_sms
     from app.modules.booking.models import Booking, BookingStatus
     from app.modules.business.models import Business, Staff
+    from app.modules.notifications.preferences import reminder_prefs
 
     if kind not in ("24h", "2h"):
         raise PermanentError(f"Unknown reminder kind {kind!r}")
@@ -223,6 +224,14 @@ async def send_booking_reminder(booking_id: str, kind: str, db: AsyncSession) ->
         return
 
     booking = (await db.execute(select(Booking).where(Booking.id == bid).options(selectinload(Booking.lines)))).scalar_one()
+    # The customer's settings (claimed either way, so a reminder they turned off isn't retried).
+    prefs = await reminder_prefs(db, booking.customer_id)
+    if not prefs.wants(kind):
+        return
+    if not prefs.sms:
+        if prefs.push:
+            await push_update(bid, f"reminder_{kind}")
+        return
     business = await db.get(Business, booking.business_id)
     staff = await db.get(Staff, booking.staff_id) if booking.staff_id else None
     tz = ZoneInfo(business.timezone if business else "Africa/Nairobi")
@@ -238,7 +247,8 @@ async def send_booking_reminder(booking_id: str, kind: str, db: AsyncSession) ->
         await db.execute(update(Booking).where(Booking.id == bid).values({column.key: None}))
         await db.commit()
         raise
-    await push_update(bid, f"reminder_{kind}")
+    if prefs.push:
+        await push_update(bid, f"reminder_{kind}")
 
 
 # ─── Push notifications about a booking (BK-41) ──────────────
