@@ -17,6 +17,7 @@ from app.workers.broker import publisher
 from app.modules.auth.router import router as auth_router
 from app.modules.booking.router import availability_router, bookings_router, my_bookings_router
 from app.modules.customers.router import router as customers_router
+from app.modules.favorites.router import router as favorites_router
 from app.modules.payouts.router import router as payouts_router
 from app.modules.earnings.router import router as earnings_router
 from app.modules.notifications.router import router as push_router
@@ -87,6 +88,7 @@ app.include_router(discovery_router, prefix=settings.API_V1_STR)
 # Public like discovery, and before business_router for the same reason.
 app.include_router(availability_router, prefix=settings.API_V1_STR)
 app.include_router(customers_router, prefix=settings.API_V1_STR)
+app.include_router(favorites_router, prefix=settings.API_V1_STR)
 app.include_router(payouts_router, prefix=settings.API_V1_STR)
 app.include_router(earnings_router, prefix=settings.API_V1_STR)
 app.include_router(push_router, prefix=settings.API_V1_STR)
