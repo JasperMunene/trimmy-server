@@ -188,6 +188,9 @@ class BusinessBookingsService:
             await self.db.rollback()
             raise _error(409, "slot_unavailable", "This time is no longer available")
 
+        from app.modules.customers.service import clean_phone, remember_customer
+
+        phone = clean_phone(data.customer_phone)
         booking = Booking(
             id=uuid_pkg.uuid4(),
             business_id=ctx.business.id,
@@ -201,7 +204,7 @@ class BusinessBookingsService:
             total_amount=quote.total,
             currency=quote.currency,
             customer_name=(data.customer_name or "").strip() or WALK_IN_NAME,
-            customer_phone=data.customer_phone,
+            customer_phone=phone,
             customer_email=data.customer_email,
             notes=data.notes,
         )
@@ -211,6 +214,7 @@ class BusinessBookingsService:
                 service_id=sid, position=position, name=service.name,
                 duration_minutes=service.duration_minutes, price_amount=service.price_amount, quantity=qty,
             ))
+        await remember_customer(self.db, ctx.business.id, booking.customer_name, phone, booking.customer_email)
         record_created(
             booking, BookingStatus.IN_PROGRESS if starts_at is None else BookingStatus.CONFIRMED,
             actor_id=user.id, reason="walk_in" if starts_at is None else "scheduled_by_business",
@@ -221,9 +225,11 @@ class BusinessBookingsService:
         except IntegrityError:
             await self.db.rollback()
             raise _error(409, "slot_unavailable", "This time is no longer available")
+        from app.modules.booking import tasks as booking_tasks
         if booking.status == BookingStatus.CONFIRMED and booking.customer_phone:
-            from app.modules.booking.tasks import notify_confirmed
-            await notify_confirmed(booking.id)  # on-behalf bookings; walk-ins are already here
+            await booking_tasks.notify_confirmed(booking.id)  # on-behalf bookings; walk-ins are already here
+        if booking.staff_id:
+            await booking_tasks.push_update(booking.id, "assigned")
         return await self.bookings.get_response(booking.id)
 
     # ─── status changes ──────────────────────────────────────
@@ -256,8 +262,29 @@ class BusinessBookingsService:
         if data.status == BookingStatus.CANCELLED:
             # The business called it off: the whole paid deposit goes back (D10).
             record_refund(booking, fee=0, refund=deposit_paid(booking))
+        elif data.status == BookingStatus.NO_SHOW:
+            await self._apply_no_show_fee(booking)
         await self.db.commit()
+        if data.status == BookingStatus.CANCELLED:
+            from app.modules.booking.tasks import push_update
+            await push_update(booking.id, "cancelled_by_business")
         return await self.bookings.get_response(booking.id)
+
+    async def _apply_no_show_fee(self, booking: Booking) -> None:
+        """Keep the policy's no-show fee from the paid deposit (BK-64); refund what's left."""
+        from app.modules.booking.cancellation import no_show_outcome
+        from app.modules.business.models import BusinessPolicies
+
+        policies = (
+            await self.db.execute(select(BusinessPolicies).where(BusinessPolicies.business_id == booking.business_id))
+        ).scalar_one_or_none()
+        percent = policies.no_show_fee_percent if policies else 100
+        result = no_show_outcome(total=booking.total_amount, deposit_paid=deposit_paid(booking), fee_percent=percent)
+        booking.no_show_fee_percent = percent
+        booking.no_show_fee = result.kept
+        booking.no_show_fee_uncollected = result.uncollected
+        if result.refund > 0:
+            booking.refund_amount, booking.refund_status = result.refund, RefundStatus.DUE
 
     # ─── refunds (BK-60, D10) ────────────────────────────────
 

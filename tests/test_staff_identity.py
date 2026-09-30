@@ -109,3 +109,14 @@ async def test_null_working_days_means_business_hours(client, auth_headers, memb
     (roster,) = (await client.get(f"/api/v1/businesses/{biz_id}/team/members", headers=auth_headers)).json()["members"]
     staff = await db_session.get(Staff, uuid.UUID(roster["staffId"]))
     assert staff.working_days is None
+
+
+@pytest.mark.asyncio
+async def test_accepted_member_gets_into_their_business(client, auth_headers, member, db_session):
+    _, member_headers = member
+    biz_id = await _business(client, auth_headers)
+    await _invite_and_accept(client, auth_headers, member_headers, biz_id, role="front_desk")
+    (roster,) = (await client.get(f"/api/v1/businesses/{biz_id}/team/members", headers=auth_headers)).json()["members"]
+
+    (entry,) = (await client.get("/api/v1/me/businesses", headers=member_headers)).json()["businesses"]
+    assert (entry["businessId"], entry["role"], entry["staffId"]) == (biz_id, "front_desk", roster["staffId"])

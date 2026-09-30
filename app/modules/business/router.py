@@ -1,5 +1,5 @@
 from typing import Optional
-from fastapi import APIRouter, Depends, UploadFile, File, Form
+from fastapi import APIRouter, Depends, UploadFile, File, Form, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -18,6 +18,7 @@ from app.modules.business.schemas import (
     GetBusinessResponse,
     InviteTeamMemberRequest,
     ListMyBusinessesResponse,
+    MyStaffServicesResponse,
     ListMyInvitationsResponse,
     ListServiceCategoriesResponse,
     ListTeamMembersResponse,
@@ -402,6 +403,17 @@ async def list_my_businesses(
 ):
     service = BusinessService(db)
     return await service.list_my_businesses(current_user.id)
+
+
+@team_router.get("/me/staff-services", response_model=MyStaffServicesResponse)
+async def my_staff_services(
+    business_id: str = Query(..., alias="businessId"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Staff / front desk: the services I've been assigned at this business."""
+    service = BusinessService(db)
+    return await service.my_staff_services(current_user.id, business_id)
 
 
 # ─── Team Invitations (received) ──────────────────────────────

@@ -97,6 +97,29 @@ class DepositPaymentResponse(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class NoShowFeeResponse(BaseModel):
+    """The no-show fee (BK-64). Only the deposit can be kept; the rest is informational."""
+
+    percent: int  # the business's no-show fee percent when it was applied
+    fee: Money  # the whole fee: percent of the booking total
+    kept: Money  # taken from the paid deposit
+    uncollected: Money  # the part the deposit didn't cover
+
+    model_config = {"populate_by_name": True}
+
+
+class BookingReviewResponse(BaseModel):
+    """booking.json#create-review response, and Booking.review once written."""
+
+    review_id: uuid_pkg.UUID = Field(alias="reviewId")
+    author_name: str = Field(alias="authorName")
+    rating: int
+    text: Optional[str] = None
+    created_at: datetime = Field(alias="createdAt")
+
+    model_config = {"populate_by_name": True}
+
+
 class RefundResponse(BaseModel):
     """Money the business owes back after a cancellation (D10: refunded by hand)."""
 
@@ -137,8 +160,16 @@ class BookingResponse(BaseModel):
     cancel_reason: Optional[str] = Field(None, alias="cancelReason")
     # Null until a deposit payment has been started (BK-31).
     deposit_payment: Optional[DepositPaymentResponse] = Field(None, alias="depositPayment")
+    # What charge-booking would take now: the total minus any deposit paid (0 once paid).
+    balance_due: Optional[Money] = Field(None, alias="balanceDue")
+    # The latest checkout charge (null until one is started); same shape as depositPayment.
+    charge_payment: Optional[DepositPaymentResponse] = Field(None, alias="chargePayment")
     # Set when a cancellation kept part of the deposit, or left a refund owed (BK-60).
     cancellation_fee: Optional[Money] = Field(None, alias="cancellationFee")
+    # The customer's review of this visit; null until written (offer it once status is completed).
+    review: Optional[BookingReviewResponse] = None
+    # Set once the business marks the booking a no-show.
+    no_show_fee: Optional[NoShowFeeResponse] = Field(None, alias="noShowFee")
     refund: Optional[RefundResponse] = None
     notes: Optional[str] = None
     created_at: datetime = Field(alias="createdAt")
@@ -210,3 +241,20 @@ class CancelBookingRequest(BaseModel):
 
 class MarkRefundedRequest(BaseModel):
     reference: Optional[str] = Field(None, max_length=50, examples=["SJK4R2T8QX"])
+
+
+# ─── Rescheduling (BK-61) ────────────────────────────────────
+
+class RescheduleRequest(BaseModel):
+    date: date
+    time: str = Field(..., pattern=r"^([01]\d|2[0-3]):[0-5]\d$", examples=["15:30"])
+    # Optional: move to someone else too. Omit to keep the current staff (or unassigned).
+    staff_id: Optional[uuid_pkg.UUID] = Field(None, alias="staffId")
+
+    model_config = {"populate_by_name": True}
+
+
+
+class CreateReviewRequest(BaseModel):
+    rating: int = Field(..., ge=1, le=5)
+    text: Optional[str] = Field(None, max_length=1000)

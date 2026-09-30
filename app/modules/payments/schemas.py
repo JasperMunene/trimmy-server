@@ -10,6 +10,12 @@ class StartPaymentRequest(BaseModel):
     phone: Optional[str] = Field(None, examples=["0712345678"])
 
 
+class ChargeRequest(BaseModel):
+    method: str = Field(..., pattern=r"^(mpesa|cash)$")
+    # For M-Pesa: the number to prompt. Defaults to the booking's customer phone.
+    phone: Optional[str] = Field(None, examples=["0712345678"])
+
+
 class StartPaymentResponse(BaseModel):
     payment_id: uuid_pkg.UUID = Field(alias="paymentId")
     booking_id: uuid_pkg.UUID = Field(alias="bookingId")

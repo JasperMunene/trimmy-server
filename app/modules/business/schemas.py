@@ -378,7 +378,10 @@ class MyBusinessResponse(BaseModel):
     business_id: uuid_pkg.UUID = Field(alias="businessId")
     name: str
     status: str
-    role: str
+    role: str  # owner | front_desk | staff
+    # The caller's own Staff record there: bookings, earnings and payouts are keyed by it.
+    # Null for an owner who doesn't take appointments themselves (team mode).
+    staff_id: Optional[uuid_pkg.UUID] = Field(None, alias="staffId")
 
     model_config = {"populate_by_name": True}
 
@@ -638,5 +641,25 @@ class StaffServicesResponse(BaseModel):
     staff_id: uuid_pkg.UUID = Field(alias="staffId")
     all_services: bool = Field(alias="allServices")
     service_ids: List[uuid_pkg.UUID] = Field(alias="serviceIds")
+
+    model_config = {"populate_by_name": True}
+
+
+class MyStaffServiceItem(BaseModel):
+    service_id: uuid_pkg.UUID = Field(alias="serviceId")
+    name: str
+    duration_minutes: int = Field(alias="durationMinutes")
+    price: MoneyResponse
+
+    model_config = {"populate_by_name": True}
+
+
+class MyStaffServicesResponse(BaseModel):
+    """The caller's own services at a business (team.json#get-my-staff-services)."""
+
+    staff_id: uuid_pkg.UUID = Field(alias="staffId")
+    all_services: bool = Field(alias="allServices")
+    # With allServices, every service the business offers; otherwise the assigned ones.
+    services: List[MyStaffServiceItem]
 
     model_config = {"populate_by_name": True}
