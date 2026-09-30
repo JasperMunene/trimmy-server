@@ -4,6 +4,21 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-30 · Day summary and submit to owner (F4)
+
+**Now live → `fulfillment.json#get-day-summary` and `#submit-day-summary`**, owner or front desk.
+
+- `GET /businesses/{businessId}/day-summary?date=2026-10-05` → the contract's shape, plus `timezone`, and `status` on each `unpaid` row:
+  - `appointments` = booked ahead (online or on the customer's behalf) and not cancelled; `walkIns` = recorded as walk-ins; `completed`, `noShows`, `cancelled` = that day's visits by status.
+  - `collected` = the **drawer**: payments that succeeded on that day, whichever day the visit was. `cash` / `mpesa` by method; `depositsCollected` / `balancePayments` (checkout charges) by kind. The two splits cover the same money, so don't add them together.
+  - `refundsPaid` = refunds marked paid back that day.
+  - `unpaid` = that day's visits `in_progress` or `completed` and not yet paid, with `balanceDue`.
+  - `submission` = `{ submittedAt, submittedBy (name), notes }`, nulls until submitted.
+- `POST /businesses/{businessId}/day-summary/{date}/submit` `{ "notes": "KSh 200 short due to change" }` → the same DaySummary with `submission` filled in. Resubmitting replaces the note. A day in the future is `400`. When the front desk submits, the owner gets an SMS (to their account phone) and a push `{ type: "day_summary_submitted", businessId, date }`.
+- Staff `403`; anyone else `404`.
+
+---
+
 ## 2026-09-30 · Push notifications (BK-41)
 
 **Now live → `auth.json#register-push-token`**, as specified, plus the logout call.

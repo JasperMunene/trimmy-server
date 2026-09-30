@@ -37,3 +37,21 @@ async def notify(user_id: Optional[uuid_pkg.UUID], title: str, body: str, **data
                                 data={k: str(v) for k, v in data.items() if v is not None})
     except Exception as e:
         logger.error(f"Could not queue push to {user_id}: {e}")
+
+
+@task("notifications.send_sms", queue="sms", max_retries=5)
+async def send_sms_task(to: str, message: str) -> None:
+    """A one-off SMS (e.g. to the owner about a submitted day)."""
+    import asyncio
+
+    from app.modules.auth.sms import deliver_sms
+
+    await asyncio.to_thread(deliver_sms, to, message, "notification")
+
+
+async def send_sms(to: str, message: str) -> None:
+    """Queue an SMS; never fails the caller."""
+    try:
+        await send_sms_task.enqueue(to=to, message=message)
+    except Exception as e:
+        logger.error(f"Could not queue SMS to {to}: {e}")
