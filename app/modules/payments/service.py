@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auth.models import User
 from app.modules.booking.bookings import expire_holds
-from app.modules.booking.models import Booking, BookingStatus
+from app.modules.booking.models import Booking, BookingStatus, PaymentStatus as BookingPaymentStatus
 from app.modules.booking.service import _aware
 from app.modules.business.models import PaymentDestination, VerificationStatus
 from app.modules.payments.models import Payment, PaymentKind, PaymentStatus
@@ -48,14 +48,10 @@ class PaymentsService:
         self.now = now or datetime.now(timezone.utc)
 
     async def start_deposit(self, user: User, booking_id: str, phone: Optional[str]) -> StartPaymentResponse:
-        not_found = _error(404, "not_found", "No booking found for this id")
-        try:
-            bid = uuid_pkg.UUID(str(booking_id))
-        except ValueError:
-            raise not_found
-        booking = await self.db.get(Booking, bid)
+        """The customer pays a pending_payment booking's deposit (BK-31)."""
+        booking = await self._booking(booking_id)
         if booking is None or booking.customer_id != user.id:
-            raise not_found
+            raise _error(404, "not_found", "No booking found for this id")
 
         if booking.status == BookingStatus.PENDING_PAYMENT and _aware(booking.expires_at) <= self.now:
             await expire_holds(self.db, self.now, business_id=booking.business_id)
@@ -64,19 +60,81 @@ class PaymentsService:
         if booking.status != BookingStatus.PENDING_PAYMENT or not booking.deposit_amount:
             raise _error(409, "no_deposit_due", f"This booking has no deposit to pay (status {booking.status})")
 
+        payment, push = await self._push(
+            booking, kind=PaymentKind.DEPOSIT, amount=booking.deposit_amount, phone=phone, description="Deposit",
+            already_paid="The deposit is already paid",
+            busy="An M-Pesa prompt was just sent; complete or cancel it on your phone first",
+        )
+        return self._started(payment, push, expires_at=_aware(booking.expires_at))
+
+    async def charge(self, user: User, booking_id: str, method: str, phone: Optional[str]):
+        """The final charge at checkout (fulfillment.json#charge-booking), owner or front desk.
+
+        Returns (status_code, body): 200 with the completed Booking for cash (or when
+        nothing is left to pay), 202 with the started payment for M-Pesa.
+        """
+        from app.modules.booking.bookings import BookingsService, deposit_paid
+        from app.modules.booking.business_bookings import FRONT_DESK, OWNER, BusinessBookingsService
+
+        booking = await self._booking(booking_id)
+        if booking is None:
+            raise _error(404, "not_found", "No booking found for this id")
+        role, _ = await BusinessBookingsService(self.db, self.now)._role(user, booking.business_id)
+        if role is None:
+            raise _error(404, "not_found", "No booking found for this id")
+        if role not in (OWNER, FRONT_DESK):
+            raise _error(403, "forbidden", "Only the owner or front desk can do this")
+        if booking.payment_status == BookingPaymentStatus.PAID:
+            raise _error(409, "already_paid", "This appointment is already paid")
+        if booking.status != BookingStatus.IN_PROGRESS:
+            raise _error(409, "not_in_progress", "Only an in-progress appointment can be charged")
+
+        balance = max(booking.total_amount - deposit_paid(booking), 0)
+        if method == "cash" or balance == 0:
+            if balance > 0:
+                self.db.add(Payment(
+                    id=uuid_pkg.uuid4(), booking_id=booking.id, kind=PaymentKind.CHARGE, provider="cash",
+                    amount=balance, currency=booking.currency, phone="", destination_type="cash", party_b="",
+                    account_reference=booking.reference, status=PaymentStatus.SUCCEEDED, settled_at=self.now,
+                ))
+            await self.db.refresh(booking, ["events"])
+            mark_charged(booking, reason="cash" if balance else "nothing_due", actor_id=user.id)
+            await self.db.commit()
+            return 200, await BookingsService(self.db, self.now).get_response(booking.id)
+
+        payment, push = await self._push(
+            booking, kind=PaymentKind.CHARGE, amount=balance, phone=phone, description="Payment",
+            already_paid="This appointment is already paid",
+            busy="An M-Pesa prompt was just sent; wait for the customer to respond",
+        )
+        return 202, self._started(payment, push, expires_at=None)
+
+    # ─── shared STK push path ────────────────────────────────
+
+    async def _booking(self, booking_id: str) -> Optional[Booking]:
+        try:
+            bid = uuid_pkg.UUID(str(booking_id))
+        except ValueError:
+            return None
+        return await self.db.get(Booking, bid)
+
+    async def _push(
+        self, booking: Booking, *, kind: str, amount: int, phone: Optional[str], description: str,
+        already_paid: str, busy: str,
+    ) -> tuple[Payment, "StkPushResult"]:
+        """Guards, routing and the STK push, shared by deposits and checkout charges."""
         attempts = (
-            await self.db.execute(select(Payment).where(Payment.booking_id == booking.id).order_by(Payment.created_at))
+            await self.db.execute(
+                select(Payment).where(Payment.booking_id == booking.id, Payment.kind == kind).order_by(Payment.created_at)
+            )
         ).scalars().all()
         if len(attempts) >= MAX_ATTEMPTS:
             raise _error(429, "too_many_attempts", "Too many payment attempts for this booking")
         latest = attempts[-1] if attempts else None
         if latest and latest.status == PaymentStatus.SUCCEEDED:
-            raise _error(409, "already_paid", "The deposit is already paid")
+            raise _error(409, "already_paid", already_paid)
         if latest and latest.status == PaymentStatus.PENDING and self.now - _aware(latest.created_at) < PENDING_LOCK:
-            raise _error(
-                409, "payment_in_progress", "An M-Pesa prompt was just sent; complete or cancel it on your phone first",
-                paymentId=str(latest.id),
-            )
+            raise _error(409, "payment_in_progress", busy, paymentId=str(latest.id))
 
         destination = (
             await self.db.execute(select(PaymentDestination).where(PaymentDestination.business_id == booking.business_id))
@@ -99,7 +157,7 @@ class PaymentsService:
             raise _error(503, "payments_unavailable", "Payments are temporarily unavailable")
 
         payment = Payment(
-            id=uuid_pkg.uuid4(), booking_id=booking.id, kind=PaymentKind.DEPOSIT, amount=booking.deposit_amount,
+            id=uuid_pkg.uuid4(), booking_id=booking.id, kind=kind, amount=amount,
             currency=booking.currency, phone=msisdn, destination_type=destination.type,
             party_b=route.party_b, account_reference=route.account_reference,
         )
@@ -108,22 +166,34 @@ class PaymentsService:
 
         try:
             push = await provider.request_payment(
-                destination, phone=msisdn, amount=booking.deposit_amount,
-                reference=booking.reference, description="Deposit",
+                destination, phone=msisdn, amount=amount, reference=booking.reference, description=description,
             )
         except MpesaError as e:
             payment.status, payment.failure_reason = PaymentStatus.FAILED, "provider_error"
             payment.result_desc = f"[{e.code}] {e.message}"[:500]
             payment.settled_at = self.now
             await self.db.commit()
-            logger.warning(f"STK push for booking {booking.reference} failed: [{e.code}] {e.message}")
+            logger.warning(f"STK push ({kind}) for booking {booking.reference} failed: [{e.code}] {e.message}")
             raise _error(502, "payment_provider_error", "M-Pesa couldn't send the prompt; please try again")
 
         payment.checkout_request_id = push.checkout_request_id
         payment.merchant_request_id = push.merchant_request_id
         await self.db.commit()
+        return payment, push
+
+    @staticmethod
+    def _started(payment: Payment, push, expires_at) -> StartPaymentResponse:
         return StartPaymentResponse(
-            paymentId=payment.id, bookingId=booking.id, status=payment.status, amount=payment.amount,
-            currency=payment.currency, phone=msisdn, customerMessage=push.customer_message,
-            expiresAt=_aware(booking.expires_at),
+            paymentId=payment.id, bookingId=payment.booking_id, status=payment.status, amount=payment.amount,
+            currency=payment.currency, phone=payment.phone, customerMessage=push.customer_message,
+            expiresAt=expires_at,
         )
+
+
+def mark_charged(booking: Booking, *, reason: str, actor_id=None) -> None:
+    """The balance is settled: complete the visit and mark it paid. The caller commits."""
+    from app.modules.booking.states import transition
+
+    booking.payment_status = BookingPaymentStatus.PAID
+    if booking.status == BookingStatus.IN_PROGRESS:
+        transition(booking, BookingStatus.COMPLETED, actor_id=actor_id, reason=f"charged: {reason}"[:100])

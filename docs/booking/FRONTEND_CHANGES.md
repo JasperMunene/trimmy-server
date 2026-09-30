@@ -4,6 +4,25 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-30 · Charge at checkout (charge-booking)
+
+**Why:** the last step of a visit. Until now no booking ever became `paid` on the server, so earnings, commission and payouts had nothing real to count. Flip `USE_MOCK_CHARGE` off.
+
+**Now live → `fulfillment.json#charge-booking`**, exactly as the contract describes, with these specifics:
+
+- `POST /bookings/{bookingId}/charge` `{ "method": "mpesa" | "cash", "phone"?: "0712345678" }`, owner or front desk, for an `in_progress` booking.
+- Amount = `balanceDue`: `totalAmount` minus any paid deposit.
+- **cash** → `200` with the Booking: `status: completed`, `paymentStatus: paid`, `paymentMethod: cash`, `paymentReference: null`.
+- **mpesa** → `202` `{ paymentId, bookingId, status: "pending", amount, currency, phone, customerMessage, expiresAt: null }`, routed to the business's own till/paybill/bank. Poll `GET /bookings/{bookingId}` every 3s: success = `status: completed` + `paymentStatus: paid` + `paymentMethod: mpesa` + `paymentReference` (receipt); failure = `chargePayment.status` `failed`/`timeout` with a `failureReason`, and the customer can be re-prompted.
+- Nothing left to pay (the deposit covered it) → `200`, completed, whatever `method` was sent.
+- Errors as in the contract: `400 invalid_phone`, `409 not_in_progress | already_paid | payment_in_progress | business_cannot_take_payments`, `429 too_many_attempts`, `502 payment_provider_error`, `503 payments_unavailable`, `403 forbidden`.
+
+**Changed response → `Booking`**: `balanceDue` (`{ amount, currency }`, 0 once paid) and `chargePayment` (`{ paymentId, status, failureReason }` or null), same shape as `depositPayment`. `paymentMethod` / `paymentReference` now come from the checkout charge once it succeeds (a paid deposit's receipt before that).
+
+**Edge case:** if an M-Pesa charge lands after the booking was already paid another way (e.g. the customer paid cash while the prompt was open), it's recorded as a refund owed (`refund.status: due`), like BK-60.
+
+---
+
 ## 2026-09-27 · Cancel within policy, refunds by hand (BK-60)
 
 **Why:** C3 "cancel within policy". Deposits sit in the business's own account, so refunds are paid back by the business by hand (decision D10); the app shows what's owed and when it's done.

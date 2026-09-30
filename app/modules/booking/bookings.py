@@ -130,6 +130,16 @@ def deposit_paid(booking: Booking) -> int:
     return booking.deposit_amount or 0
 
 
+def _settling(deposit: Optional[Payment], charge: Optional[Payment]) -> tuple[Optional[str], Optional[str]]:
+    """(paymentMethod, paymentReference) for the response: the checkout charge once it
+    succeeded, else a paid deposit's M-Pesa receipt."""
+    if charge is not None and charge.status == "succeeded":
+        return charge.provider, charge.mpesa_receipt
+    if deposit is not None and deposit.mpesa_receipt:
+        return "mpesa", deposit.mpesa_receipt
+    return None, None
+
+
 def record_refund(booking: Booking, fee: int, refund: int) -> None:
     """Store a cancellation's money: the fee kept, and any refund the business now owes (D10)."""
     booking.cancellation_fee = fee or None
@@ -472,22 +482,27 @@ class BookingsService:
             s.id: s for s in (await self.db.execute(select(Staff).where(Staff.id.in_(staff_ids)))).scalars()
         } if staff_ids else {}
         latest_deposit: dict = {}
+        latest_charge: dict = {}
         if bookings:
             payments = await self.db.execute(
-                select(Payment)
-                .where(Payment.booking_id.in_([b.id for b in bookings]), Payment.kind == PaymentKind.DEPOSIT)
-                .order_by(Payment.created_at)
+                select(Payment).where(Payment.booking_id.in_([b.id for b in bookings])).order_by(Payment.created_at)
             )
-            for p in payments.scalars():
-                latest_deposit[p.booking_id] = p  # ordered, so the last one wins
+            for p in payments.scalars():  # ordered, so the last of each kind wins
+                (latest_charge if p.kind == PaymentKind.CHARGE else latest_deposit)[p.booking_id] = p
         return [
-            self._response(b, businesses.get(b.business_id), staff.get(b.staff_id), latest_deposit.get(b.id))
+            self._response(
+                b, businesses.get(b.business_id), staff.get(b.staff_id), latest_deposit.get(b.id), latest_charge.get(b.id)
+            )
             for b in bookings
         ]
 
     @staticmethod
     def _response(
-        booking: Booking, business: Optional[Business], staff: Optional[Staff], deposit: Optional[Payment] = None
+        booking: Booking,
+        business: Optional[Business],
+        staff: Optional[Staff],
+        deposit: Optional[Payment] = None,
+        charge: Optional[Payment] = None,
     ) -> BookingResponse:
         tz = ZoneInfo(business.timezone) if business else timezone.utc
         return BookingResponse(
@@ -525,7 +540,7 @@ class BookingsService:
                 DepositPaymentResponse(paymentId=deposit.id, status=deposit.status, failureReason=deposit.failure_reason)
                 if deposit else None
             ),
-            paymentReference=deposit.mpesa_receipt if deposit else None,
+            paymentReference=_settling(deposit, charge)[1],
             cancellationFee=Money(amount=booking.cancellation_fee, currency=booking.currency) if booking.cancellation_fee else None,
             refund=(
                 RefundResponse(
@@ -536,7 +551,15 @@ class BookingsService:
                 )
                 if booking.refund_status else None
             ),
-            paymentMethod="mpesa" if deposit and deposit.mpesa_receipt else None,
+            paymentMethod=_settling(deposit, charge)[0],
+            balanceDue=Money(
+                amount=0 if booking.payment_status == PaymentStatus.PAID else max(booking.total_amount - deposit_paid(booking), 0),
+                currency=booking.currency,
+            ),
+            chargePayment=(
+                DepositPaymentResponse(paymentId=charge.id, status=charge.status, failureReason=charge.failure_reason)
+                if charge else None
+            ),
             notes=booking.notes,
             createdAt=_aware(booking.created_at),
         )

@@ -16,7 +16,7 @@ from app.modules.booking.bookings import _lock_business_day
 from app.modules.booking.models import Booking, BookingEvent, BookingStatus, PaymentStatus as BookingPaymentStatus
 from app.modules.booking.service import AvailabilityService, _aware
 from app.modules.booking.states import REINSTATABLE_CANCEL_REASON, transition
-from app.modules.payments.models import Payment, PaymentStatus
+from app.modules.payments.models import Payment, PaymentKind, PaymentStatus
 from app.modules.payments.mpesa import PaymentResult
 
 logger = logging.getLogger(__name__)
@@ -53,13 +53,35 @@ async def apply_result(
     if result.status == PaymentStatus.SUCCEEDED:
         if result.amount is not None and result.amount != payment.amount:
             logger.error(f"Payment {payment.id}: M-Pesa reports KES {result.amount}, expected {payment.amount}")
-        confirmed = await _deposit_paid(db, payment, now)
+        if payment.kind == PaymentKind.CHARGE:
+            await _charge_paid(db, payment)
+        else:
+            confirmed = await _deposit_paid(db, payment, now)
     booking_id = payment.booking_id
     await db.commit()
     if confirmed:
         from app.modules.booking.tasks import notify_confirmed
         await notify_confirmed(booking_id)
     return payment
+
+
+async def _charge_paid(db: AsyncSession, payment: Payment) -> None:
+    """The checkout balance arrived: complete the visit and mark it paid."""
+    from app.modules.booking.bookings import record_refund
+    from app.modules.payments.service import mark_charged
+
+    booking = (
+        await db.execute(select(Booking).where(Booking.id == payment.booking_id).options(selectinload(Booking.events)))
+    ).scalar_one()
+    if booking.payment_status == BookingPaymentStatus.PAID:
+        # Settled some other way meanwhile (e.g. cash): the customer paid twice.
+        record_refund(booking, fee=0, refund=payment.amount)
+        logger.error(
+            f"Booking {booking.reference} was already paid when M-Pesa charge {payment.mpesa_receipt} "
+            f"(KES {payment.amount}) arrived; refund due"
+        )
+        return
+    mark_charged(booking, reason=f"mpesa:{payment.mpesa_receipt}" if payment.mpesa_receipt else "mpesa")
 
 
 async def _deposit_paid(db: AsyncSession, payment: Payment, now: datetime) -> bool:

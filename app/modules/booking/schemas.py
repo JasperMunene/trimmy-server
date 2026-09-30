@@ -137,6 +137,10 @@ class BookingResponse(BaseModel):
     cancel_reason: Optional[str] = Field(None, alias="cancelReason")
     # Null until a deposit payment has been started (BK-31).
     deposit_payment: Optional[DepositPaymentResponse] = Field(None, alias="depositPayment")
+    # What charge-booking would take now: the total minus any deposit paid (0 once paid).
+    balance_due: Optional[Money] = Field(None, alias="balanceDue")
+    # The latest checkout charge (null until one is started); same shape as depositPayment.
+    charge_payment: Optional[DepositPaymentResponse] = Field(None, alias="chargePayment")
     # Set when a cancellation kept part of the deposit, or left a refund owed (BK-60).
     cancellation_fee: Optional[Money] = Field(None, alias="cancellationFee")
     refund: Optional[RefundResponse] = None
