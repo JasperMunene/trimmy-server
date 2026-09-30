@@ -37,6 +37,7 @@ from app.modules.business.models import Business, Staff
 
 OWNER, FRONT_DESK, STAFF = "owner", "front_desk", "staff"
 MAX_RANGE_DAYS = 62
+CUSTOMER_HISTORY_LIMIT = 200
 WALK_IN_NAME = "Walk-in customer"
 
 
@@ -86,6 +87,9 @@ class BusinessBookingsService:
         staff_id: Optional[uuid_pkg.UUID],
         unassigned: bool,
         refund: Optional[str] = None,
+        customer_id: Optional[uuid_pkg.UUID] = None,
+        phone: Optional[str] = None,
+        limit: Optional[int] = None,
     ) -> BusinessBookingsResponse:
         try:
             bid = uuid_pkg.UUID(str(business_id))
@@ -99,8 +103,26 @@ class BusinessBookingsService:
             raise _error(400, "validation_error", "refund must be due or refunded")
         if day:
             start = end = day
-        # Refunds owed are listed whatever their date; everything else needs a range.
-        if (not start or not end) and refund is None:
+        # One customer's history (Customer Detail): their bookings by phone, or by email for a
+        # customer saved without one. Newest first, any date.
+        history = customer_id is not None or bool(phone)
+        match = None
+        if history:
+            from app.modules.customers.models import BusinessCustomer
+            from app.modules.customers.service import clean_phone
+
+            if customer_id is not None:
+                saved = await self.db.get(BusinessCustomer, customer_id)
+                if saved is None or saved.business_id != bid:
+                    raise _error(404, "not_found", "No customer found for this id")
+                if saved.phone:
+                    match = Booking.customer_phone == saved.phone
+                elif saved.email:
+                    match = Booking.customer_email == saved.email
+            else:
+                match = Booking.customer_phone == clean_phone(phone)
+        # Refunds owed and a customer's history are listed whatever their date; everything else needs a range.
+        if (not start or not end) and refund is None and not history:
             raise _error(400, "validation_error", "Pass date, or from and to")
         if start and end and (end < start or (end - start).days >= MAX_RANGE_DAYS):
             raise _error(400, "validation_error", f"from..to must be 1 to {MAX_RANGE_DAYS} days")
@@ -133,6 +155,11 @@ class BusinessBookingsService:
             if not set(statuses) <= {s.value for s in BookingStatus}:
                 raise _error(400, "validation_error", f"Unknown status in {status!r}")
             query = query.where(Booking.status.in_(statuses))
+        if history:
+            if match is None:
+                return BusinessBookingsResponse(bookings=[])
+            query = query.where(match).order_by(None).order_by(Booking.starts_at.desc(), Booking.id)
+            query = query.limit(min(limit or CUSTOMER_HISTORY_LIMIT, CUSTOMER_HISTORY_LIMIT))
         rows = (await self.db.execute(query)).scalars().all()
         return BusinessBookingsResponse(bookings=await self.bookings.to_responses(rows))
 

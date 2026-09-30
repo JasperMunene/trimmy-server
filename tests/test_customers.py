@@ -90,3 +90,45 @@ async def test_who_can_see_customers(client, auth_headers, salon, customer, db_s
     member.user_id = stylist.id
     await db_session.commit()
     assert (await client.get(url, headers=headers_for(stylist))).status_code == 403
+
+
+# ─── One customer's bookings (Customer Detail) ───────────────
+
+
+async def history(client, headers, salon, **params):
+    return await client.get(f"/api/v1/businesses/{salon['id']}/bookings", params=params, headers=headers)
+
+
+@pytest.mark.asyncio
+async def test_bookings_by_customer_newest_first_any_date(client, auth_headers, salon, customer, db_session):
+    from datetime import datetime, timedelta, timezone
+
+    from tests.test_read_bookings import insert_booking
+
+    user, _ = customer
+    now = datetime.now(timezone.utc)
+    old = await insert_booking(db_session, salon, user.id, now - timedelta(days=200), status="completed", customer_phone="+254722000111")
+    soon = await insert_booking(db_session, salon, user.id, now + timedelta(days=3), customer_phone="+254722000111")
+    await insert_booking(db_session, salon, user.id, now, customer_phone="+254733000222")  # someone else
+    old_id, soon_id = str(old.id), str(soon.id)
+    await save(client, auth_headers, salon, name="Amina", phone="+254722000111")
+    (amina,) = [c for c in (await customers(client, auth_headers, salon))["customers"] if c["phone"] == "+254722000111"]
+
+    by_id = await history(client, auth_headers, salon, customerId=amina["customerId"])
+    assert by_id.status_code == 200, by_id.text
+    assert [b["bookingId"] for b in by_id.json()["bookings"]] == [soon_id, old_id]
+    by_phone = (await history(client, auth_headers, salon, phone="0722 000 111")).json()["bookings"]
+    assert [b["bookingId"] for b in by_phone] == [soon_id, old_id]
+    one = (await history(client, auth_headers, salon, phone="0722000111", limit=1)).json()["bookings"]
+    assert [b["bookingId"] for b in one] == [soon_id]
+    done = (await history(client, auth_headers, salon, phone="0722000111", status="completed")).json()["bookings"]
+    assert [b["bookingId"] for b in done] == [old_id]
+
+
+@pytest.mark.asyncio
+async def test_bookings_by_customer_errors(client, auth_headers, salon):
+    assert (await history(client, auth_headers, salon, customerId=str(uuid.uuid4()))).status_code == 404
+    bad = await history(client, auth_headers, salon, phone="not a phone")
+    assert bad.status_code == 400 and bad.json()["error"] == "invalid_phone"
+    no_phone = (await save(client, auth_headers, salon, name="Cash only")).json()
+    assert (await history(client, auth_headers, salon, customerId=no_phone["customerId"])).json()["bookings"] == []
