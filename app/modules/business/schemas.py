@@ -51,6 +51,7 @@ class CreateBusinessResponse(BaseModel):
     categories: List[str]
     phone: str
     location: LocationResponse
+    amenities: List[str] = []
     status: str
     onboarding_step: Optional[str] = Field(None, alias="onboardingStep")
     created_at: datetime = Field(alias="createdAt")
@@ -64,6 +65,7 @@ class UpdateBusinessResponse(BaseModel):
     categories: List[str]
     phone: str
     location: LocationResponse
+    amenities: List[str] = []
 
     model_config = {"from_attributes": True, "populate_by_name": True}
 
