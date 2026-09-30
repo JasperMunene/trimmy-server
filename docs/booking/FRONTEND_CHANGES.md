@@ -4,6 +4,19 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-30 · Amenities on update-business-info (P3)
+
+**Fixed → `business-setup.json#update-business-info` (issues)**:
+
+- `PATCH /businesses/{businessId}` now saves `amenities`.
+  - Sending a list replaces the amenities; `[]` clears them.
+  - Leaving `amenities` out keeps them as they are, so older app versions don't wipe them.
+- `amenities` (always a list) is now in the responses of both `create-business` and `update-business-info`, as well as `get-business-draft` and the profile.
+
+**App code to update:** add amenities to Edit Business Info and send the full list on save.
+
+---
+
 ## 2026-09-30 · Bookings by customer (P3)
 
 **Changed → `fulfillment.json#list-business-bookings` (issues)**: two new filters for Customer Detail's appointment history. With either, no `date` or `from`/`to` is needed, and results come **newest first**.

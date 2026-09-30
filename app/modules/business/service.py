@@ -385,6 +385,7 @@ class BusinessService:
             categories=business.categories,
             phone=business.phone,
             location=LocationResponse(**business.location),
+            amenities=business.amenities or [],
             status=business.status,
             onboardingStep=business.onboarding_step,
             createdAt=business.created_at,
@@ -410,6 +411,8 @@ class BusinessService:
         business.categories = data.categories
         business.phone = data.phone
         business.location = data.location.model_dump()
+        if data.amenities is not None:  # left out = unchanged (older app versions don't send it)
+            business.amenities = data.amenities
         await self.db.commit()
         await self.db.refresh(business)
 
@@ -419,6 +422,7 @@ class BusinessService:
             categories=business.categories,
             phone=business.phone,
             location=LocationResponse(**business.location),
+            amenities=business.amenities or [],
         )
 
     # ─── get-business-draft ──────────────────────────────────
