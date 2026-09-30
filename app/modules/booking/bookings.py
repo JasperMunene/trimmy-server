@@ -29,6 +29,7 @@ from app.modules.booking.pricing import DepositPolicy, Line, PricingError, quote
 from app.modules.booking.schemas import (
     BookingLineResponse,
     CancelPreviewResponse,
+    NoShowFeeResponse,
     RefundResponse,
     DepositPaymentResponse,
     BookingResponse,
@@ -259,9 +260,11 @@ class BookingsService:
             logger.warning(f"Booking insert rejected by the database: {e.orig}")
             raise slot_unavailable()
 
+        from app.modules.booking import tasks as booking_tasks
         if booking.status == BookingStatus.CONFIRMED:
-            from app.modules.booking.tasks import notify_confirmed
-            await notify_confirmed(booking.id)
+            await booking_tasks.notify_confirmed(booking.id)
+        if booking.staff_id:
+            await booking_tasks.push_update(booking.id, "assigned")
         return await self.get_response(booking.id)
 
     # ─── cancelling (BK-60) ──────────────────────────────────
@@ -383,6 +386,8 @@ class BookingsService:
         except IntegrityError:
             await self.db.rollback()
             raise _error(409, "staff_unavailable", "That staff member is already booked at this time")
+        from app.modules.booking import tasks as booking_tasks
+        await booking_tasks.push_update(booking.id, "assigned")
         return await self.get_response(booking.id)
 
     async def _can_manage(self, user: User, business_id: uuid_pkg.UUID) -> bool:
@@ -483,6 +488,13 @@ class BookingsService:
         staff = {
             s.id: s for s in (await self.db.execute(select(Staff).where(Staff.id.in_(staff_ids)))).scalars()
         } if staff_ids else {}
+        from app.modules.booking.reviews import review_response
+        from app.modules.business.models import Review
+
+        reviews: dict = {}
+        if bookings:
+            for r in (await self.db.execute(select(Review).where(Review.booking_id.in_([b.id for b in bookings])))).scalars():
+                reviews[r.booking_id] = review_response(r)
         latest_deposit: dict = {}
         latest_charge: dict = {}
         if bookings:
@@ -491,12 +503,15 @@ class BookingsService:
             )
             for p in payments.scalars():  # ordered, so the last of each kind wins
                 (latest_charge if p.kind == PaymentKind.CHARGE else latest_deposit)[p.booking_id] = p
-        return [
+        responses = [
             self._response(
                 b, businesses.get(b.business_id), staff.get(b.staff_id), latest_deposit.get(b.id), latest_charge.get(b.id)
             )
             for b in bookings
         ]
+        for response in responses:
+            response.review = reviews.get(response.booking_id)
+        return responses
 
     @staticmethod
     def _response(
@@ -544,6 +559,15 @@ class BookingsService:
             ),
             paymentReference=_settling(deposit, charge)[1],
             cancellationFee=Money(amount=booking.cancellation_fee, currency=booking.currency) if booking.cancellation_fee else None,
+            noShowFee=(
+                NoShowFeeResponse(
+                    percent=booking.no_show_fee_percent,
+                    fee=Money(amount=(booking.no_show_fee or 0) + (booking.no_show_fee_uncollected or 0), currency=booking.currency),
+                    kept=Money(amount=booking.no_show_fee or 0, currency=booking.currency),
+                    uncollected=Money(amount=booking.no_show_fee_uncollected or 0, currency=booking.currency),
+                )
+                if booking.no_show_fee_percent is not None else None
+            ),
             refund=(
                 RefundResponse(
                     amount=Money(amount=booking.refund_amount or 0, currency=booking.currency),

@@ -4,6 +4,227 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-30 · Favorites (P3)
+
+**Now live → `discovery.json#favorites`**, for any signed-in user.
+
+- `GET /me/favorites` → `{ businesses: [BusinessSummary], staff: [{ staffId, name, businessId, businessName, avatarUrl, role, rating }] }`, newest saved first.
+  - `businesses` use the same shape as `search-businesses` (`distanceKm` is 0, since no location is sent).
+  - `role` and `rating` on staff are extras.
+- `PUT /me/favorites/businesses/{businessId}` and `DELETE …` → `204`. Both are idempotent.
+- `PUT /me/favorites/staff/{staffId}` and `DELETE …` → `204`. Both are idempotent.
+- Saving something that isn't a published business, or a staff member at one, is `404 not_found`.
+- A business that is unpublished later drops out of the list (with its staff) and comes back if it's published again. A deleted business or staff member is removed.
+
+**App code to update:** load the Wishlist from `GET /me/favorites` after login. The heart button calls PUT or DELETE (it can update the screen first, since both are idempotent). Drop the phone-only store.
+
+---
+
+## 2026-09-30 · Reminder preferences (P3, C5 "configurable")
+
+**New → `auth.json`** (there was no spec, so this is a minimal version): any signed-in user.
+
+```json
+{
+  "id": "get-notification-preferences",
+  "status": "live",
+  "screen": "Profile → Notification Preferences",
+  "method": "GET",
+  "path": "/me/notification-preferences",
+  "response": { "reminders": { "dayBefore": true, "twoHoursBefore": true, "sms": true, "push": true } }
+},
+{
+  "id": "update-notification-preferences",
+  "status": "live",
+  "method": "PATCH",
+  "path": "/me/notification-preferences",
+  "description": "Only the fields sent change. Returns the full preferences.",
+  "request": { "reminders": { "dayBefore": false } },
+  "response": { "reminders": { "dayBefore": false, "twoHoursBefore": true, "sms": true, "push": true } }
+}
+```
+
+- Everything is on until the customer changes something.
+- `dayBefore` / `twoHoursBefore` turn each BK-62 reminder on or off. `sms` / `push` pick how reminders are sent.
+- These settings only affect **reminders**. Booking confirmations, cancellations by the business and other alerts are always sent.
+- A reminder that is turned off is skipped for that booking. Turning it back on doesn't resend a reminder that was already due.
+
+**App code to update:** a Notification Preferences screen with four switches: "Day before", "2 hours before", "By SMS" and "By push notification".
+
+---
+
+## 2026-09-30 · Solo → team switch (P2)
+
+**Fixed → `business-setup.json#set-team-mode` (issues)**. The request and response are unchanged.
+
+1. **The wizard step no longer rewinds.** `PATCH /businesses/{id}/team-mode` only moves `onboardingStep` forward to `team_mode`, and never touches it once the business is published. A published business stays at `review_publish`.
+2. **The owner stays bookable after switching to team.**
+   - Their staff record (created when they published as solo) is kept as it is.
+   - They're still in the profile's `staff[]` and in availability.
+   - Bookings already assigned to them stay theirs.
+   - `/me/businesses` keeps returning their `staffId`, so the app should keep their personal schedule when `staffId` is set, whatever the `teamMode`.
+   - An owner who no longer takes clients can drop out of the schedule with `PUT /businesses/{id}/staff/{staffId}/services` `{ "allServices": false, "serviceIds": [] }`.
+3. **A published team business switching to solo** gets the owner's staff record if it doesn't have one, so there's always someone to book. There's never a duplicate.
+
+`staffId` is still null for an owner who published in team mode and never worked solo. That's unchanged.
+
+---
+
+## 2026-09-30 · Invitations match by email or phone (P1)
+
+**Fixed → `team.json#list-my-invitations` (issues)** and `respond-to-invitation`. No request or response changes.
+
+- A pending invitation now reaches the signed-in (verified) user when **either** its email or its phone matches theirs.
+- Emails are compared case-insensitively. Phones are compared in E.164, so `0722 000 111` on the invite matches `+254722000111` on the account.
+- So email invites work, and Google users with no phone see theirs. They show up as soon as the person registers and verifies, or signs in with Google.
+- Invites are stored normalised: a lowercase email and an E.164 phone (an invalid phone is kept as typed). Existing invites were normalised too (migration `021`).
+- The duplicate checks (`409 already_invited` / `already_member`) now compare across formats, so a number typed differently can't be invited twice.
+- Only the person an invite matches can accept it. Anyone else gets `404`.
+
+**App code to update:** drop the "add a phone number to see invitations" prompt.
+
+---
+
+## 2026-09-30 · Reviews (P2)
+
+**Now live → `booking.json#create-review`**: `POST /bookings/{bookingId}/review` `{ "rating": 1-5, "text"?: "Great fade" }` → `201`.
+
+```json
+{ "reviewId": "uuid", "authorName": "Amina W", "rating": 5, "text": "Great fade", "createdAt": "2026-10-05T16:10:00Z" }
+```
+
+- Only the customer who booked, only once the booking is `completed`, once per booking. `text` is optional (max 1000 chars).
+- `authorName` is the customer's first name and last initial.
+- The review shows straight away in the business profile's `reviews` (newest first) and counts toward the business's `rating` / `reviewCount`. The staff member's `rating` becomes the average of their reviews.
+- Errors: `409 not_completed` ("You can review once the appointment is done"), `409 already_reviewed`, `404 not_found` (not your booking), `422` for a rating outside 1-5.
+
+**Changed response → `Booking`**: new `review`, `{ reviewId, authorName, rating, text, createdAt }` or null.
+
+**App code to update**
+
+- Appointment Detail / Past tab: show "Leave a review" when `status === "completed"` and `review === null`; otherwise show their review.
+- After a successful post, put the response into the booking's `review` (or refetch the booking).
+
+---
+
+## 2026-09-30 · Front desk: confirmed, and no longer bookable
+
+**Answers → `fulfillment.json#frontDeskNote`:**
+
+- **Yes, the public profile lists every accepted staff member**, with or without ratings or photos (`staff[]` is every staff record at the business, including front desk and a solo owner). Each has `role`, `allServices`, `serviceIds` and `workingDays`, so the front desk app can build its staff and service pickers from it.
+- **Yes, front desk can call every endpoint marked "owner or front desk"**, now covered by a test: business bookings (all filters incl. `unassigned` and `refund=due`), walk-in, scheduled, assign staff, status changes, reschedule, charge, customers (list and save), mark refunded, day summary and submit. Owner-only stays owner-only: earnings, team management, staff services (set), business settings, payouts approval.
+- Note: the profile only exists for **published** businesses.
+
+**Fixed:** accepting a **front desk** invite used to make them "perform every service", so customers could book the front desk and availability counted them as capacity. Front desk now start with **no services** (`allServices: false`, `serviceIds: []`): not bookable, hidden by Select Staff. The owner can still give a front desk person services with `set-staff-services`. Existing front desk records were switched too (migration `019`), unless the owner had already set their services.
+
+---
+
+## 2026-09-30 · Day summary and submit to owner (F4)
+
+**Now live → `fulfillment.json#get-day-summary` and `#submit-day-summary`**, owner or front desk.
+
+- `GET /businesses/{businessId}/day-summary?date=2026-10-05` → the contract's shape, plus `timezone`, and `status` on each `unpaid` row:
+  - `appointments` = booked ahead (online or on the customer's behalf) and not cancelled; `walkIns` = recorded as walk-ins; `completed`, `noShows`, `cancelled` = that day's visits by status.
+  - `collected` = the **drawer**: payments that succeeded on that day, whichever day the visit was. `cash` / `mpesa` by method; `depositsCollected` / `balancePayments` (checkout charges) by kind. The two splits cover the same money, so don't add them together.
+  - `refundsPaid` = refunds marked paid back that day.
+  - `unpaid` = that day's visits `in_progress` or `completed` and not yet paid, with `balanceDue`.
+  - `submission` = `{ submittedAt, submittedBy (name), notes }`, nulls until submitted.
+- `POST /businesses/{businessId}/day-summary/{date}/submit` `{ "notes": "KSh 200 short due to change" }` → the same DaySummary with `submission` filled in. Resubmitting replaces the note. A day in the future is `400`. When the front desk submits, the owner gets an SMS (to their account phone) and a push `{ type: "day_summary_submitted", businessId, date }`.
+- Staff `403`; anyone else `404`.
+
+---
+
+## 2026-09-30 · Push notifications (BK-41)
+
+**Now live → `auth.json#register-push-token`**, as specified, plus the logout call.
+
+- `POST /me/push-tokens` `{ "token": "ExponentPushToken[…]", "platform": "ios" | "android" }` → `{ "ok": true }`. Any signed-in user; idempotent. If another account registers the same token (someone else signs in on that phone), it moves to them. `400 invalid_token` if it isn't an Expo token.
+- `DELETE /me/push-tokens/{token}` → `204`, on logout. Idempotent; only removes your own.
+- Tokens Expo reports as `DeviceNotRegistered` are deleted automatically.
+
+**What gets pushed** (every notification's `data` has `type` plus the ids to open):
+
+| `data.type` | To | When | `data` |
+| --- | --- | --- | --- |
+| `booking_confirmed` | customer | booking confirmed (no deposit / deposit paid / booked on their behalf / rescheduled) | `bookingId`, `businessId` |
+| `booking_cancelled_by_business` | customer | the business cancelled it | `bookingId`, `businessId` |
+| `booking_reminder_24h`, `booking_reminder_2h` | customer | the BK-62 reminders | `bookingId`, `businessId` |
+| `booking_assigned` | staff | a booking made with them, or (re)assigned to them | `bookingId`, `businessId` |
+| `payout_responded` | staff | their payout approved or declined | `payoutId`, `businessId` |
+
+The owner's "day summary submitted" push comes with the day-summary endpoints (next).
+
+**App code to update**
+
+- After login (all roles): get the Expo token and `POST /me/push-tokens`; on logout `DELETE /me/push-tokens/{token}`.
+- Notification tap: route on `data.type` → Appointment Detail (`bookingId`) or Payout Detail (`payoutId`).
+
+---
+
+## 2026-09-30 · Staff see their own services (P1)
+
+**Now live → `team.json#get-my-staff-services`**, as specified: `GET /me/staff-services?businessId=uuid` for the staff member or front desk themselves.
+
+```json
+{ "staffId": "uuid", "allServices": false,
+  "services": [{ "serviceId": "uuid", "name": "Classic Haircut", "durationMinutes": 45, "price": { "amount": 800, "currency": "KES" } }] }
+```
+
+- `allServices: true` → `services` lists every service the business offers (so "My services" always has something concrete to show).
+- `404 not_found` "You don't work at this business" if the caller has no staff record there.
+
+---
+
+## 2026-09-30 · Charge a completed-but-unpaid visit (P1)
+
+**Answers → `fulfillment.json#charge-booking` issue (P1):** option (a). `charge-booking` now accepts a booking that is `in_progress` **or** `completed` and not yet `paid`. Staff can keep finishing their own appointments with `update-booking-status`; the owner / front desk charges it afterwards, and it then counts toward earnings and the staff member's commission. Cancelled, no-show and pending bookings still get `409 not_in_progress` (message now "Only an in-progress or completed appointment can be charged").
+
+**App code to update:** offer "Charge customer" on a completed booking whenever `paymentStatus !== "paid"` (i.e. `balanceDue.amount > 0`).
+
+---
+
+## 2026-09-30 · No-show fee (BK-64)
+
+**Why:** when the business marks a booking `no_show`, the owner and the customer both see what the no-show cost.
+
+**How it's worked out:** the business's `noShow.feePercent` (default 100%) of the booking total. There's no card on file, so only a paid deposit can be kept: the fee comes out of the deposit, capped at it. Anything left of the deposit is refunded (a `refund` owed, as in BK-60), and the part of the fee the deposit didn't cover is shown as `uncollected`.
+
+**Changed response → `Booking`**: a new `noShowFee`, null unless the booking was marked no-show.
+
+```json
+{
+  "noShowFee": {
+    "percent": 100,
+    "fee": { "amount": 800, "currency": "KES" },
+    "kept": { "amount": 300, "currency": "KES" },
+    "uncollected": { "amount": 500, "currency": "KES" }
+  }
+}
+```
+
+- 25% fee on an 800 booking with a 300 deposit: `fee` 200, `kept` 200, `uncollected` 0, and a `refund` of 100 due.
+- No deposit: `kept` 0, `uncollected` = the whole fee.
+
+**Changed → `fulfillment.json#get-earnings-summary`**: `money.noShowFees` = fees kept from no-shows' deposits in the range (not in `totalRevenue`).
+
+**App code to update**
+
+- Appointment Detail (owner and customer) for a `no_show`: "No-show fee: KES 300 kept from your deposit" (+ "KES 500 not collected" for the owner), and the refund line when `refund` is set.
+- The customer's "No-show notice" (C5) can use `noShowFee.percent` to explain the policy.
+
+---
+
+## 2026-09-30 · Reminders by SMS (BK-62)
+
+**Why:** C5 "reminders before my appointment". No API change; reminders go by SMS now, and push can be added once push tokens (BK-41) exist.
+
+- **Day before:** once the booking is 24h away, if it was booked at least a day ahead. e.g. `Trimmy reminder: Glow Beauty, Classic Haircut with Wanjiku, tomorrow 14:30. Ref BK7F3AQ9. To change it, open the Trimmy app.`
+- **2 hours before:** with a map link when the business has coordinates. e.g. `Trimmy: see you at 14:30 at Glow Beauty (Classic Haircut). Ref BK7F3AQ9. Directions: https://maps.google.com/?q=-1.29,36.78`
+- Only for `confirmed` bookings with a `customerPhone`; each once per booking. Rescheduling resets them for the new time; cancelled and unpaid bookings get none.
+- Not built yet: the customer's reminder preferences (C5 "configurable", Notification Preferences). Every confirmed customer gets both for now.
+
+---
+
 ## 2026-09-30 · Reschedule (BK-61)
 
 **Why:** C3 "manage my appointments": move an appointment instead of cancelling and rebooking.

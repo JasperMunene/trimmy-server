@@ -47,6 +47,7 @@ class BookingRow:
     commission: int = 0
     deposit_paid: int = 0
     cancellation_fee: int = 0
+    no_show_fee: int = 0
     refund_amount: int = 0
     refund_status: Optional[str] = None
 
@@ -91,6 +92,7 @@ class Summary:
     collected: list[dict] = field(default_factory=list)
     deposits_collected: int = 0
     cancellation_fees: int = 0
+    no_show_fees: int = 0
     refunds_due: int = 0
     refunds_paid: int = 0
 
@@ -230,6 +232,7 @@ def summarise(
         collected=sorted(collected.values(), key=lambda r: (r["method"], r["kind"])),
         deposits_collected=sum(r["amount"] for r in collected.values() if r["kind"] == "deposit"),
         cancellation_fees=sum(b.cancellation_fee for b in in_range if b.status == "cancelled"),
+        no_show_fees=sum(b.no_show_fee for b in in_range if b.status == "no_show"),
         refunds_due=sum(b.refund_amount for b in in_range if b.refund_status == "due"),
         refunds_paid=sum(b.refund_amount for b in in_range if b.refund_status == "refunded"),
     )

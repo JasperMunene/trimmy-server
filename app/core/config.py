@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     # Region assumed when a phone number has no international prefix.
     SMS_DEFAULT_COUNTRY: str = "KE"
 
+    # Expo push notifications (BK-41). Empty URL = don't send (log only), as in tests.
+    EXPO_PUSH_URL: str = "https://exp.host/--/api/v2/push/send"
+    EXPO_ACCESS_TOKEN: str = ""  # only if "enhanced push security" is on in the Expo project
+
     GOOGLE_AUTH_CLIENT_ID: str = ""
     GOOGLE_AUTH_CLIENT_SECRET: str = ""
     # This server's callback. Must be listed exactly under "Authorized redirect URIs"

@@ -145,3 +145,30 @@ async def test_who_can_charge(client, auth_headers, salon, customer, db_session)
     await db_session.commit()
     assert (await charge(client, headers_for(stylist), booking_id, method="cash")).status_code == 403
     assert (await charge(client, auth_headers, booking_id, method="card")).status_code == 422
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["cash", "mpesa"])
+async def test_a_completed_but_unpaid_visit_can_still_be_charged(client, auth_headers, salon, till, provider, db_session, method):
+    """Staff may mark their own booking completed; checkout afterwards must still work."""
+    booking_id = await walk_in(client, auth_headers, salon)
+    done = await client.patch(f"/api/v1/bookings/{booking_id}/status", json={"status": "completed"}, headers=auth_headers)
+    assert (done.json()["status"], done.json()["paymentStatus"], done.json()["balanceDue"]["amount"]) == ("completed", "unpaid", 800)
+
+    resp = await charge(client, auth_headers, booking_id, method=method)
+    if method == "cash":
+        assert resp.status_code == 200
+    else:
+        assert resp.status_code == 202
+        await post_callback(client, callback(await checkout_id(db_session, resp.json()["paymentId"]), amount=800))
+    b = await get(client, auth_headers, booking_id)
+    assert (b["status"], b["paymentStatus"], b["balanceDue"]["amount"]) == ("completed", "paid", 0)
+
+
+@pytest.mark.asyncio
+async def test_other_statuses_still_cannot_be_charged(client, auth_headers, salon, customer):
+    _, cust = customer
+    cancelled = (await book(client, cust, body(salon))).json()["bookingId"]
+    await client.post(f"/api/v1/bookings/{cancelled}/cancel", json={}, headers=cust)
+    resp = await charge(client, auth_headers, cancelled, method="cash")
+    assert resp.status_code == 409 and resp.json()["error"] == "not_in_progress"

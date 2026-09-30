@@ -5,11 +5,12 @@ from math import asin, cos, radians, sin, sqrt
 from typing import Optional
 import uuid as uuid_pkg
 from fastapi import HTTPException, UploadFile
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
+from app.core.phone_utils import InvalidPhoneNumberError, normalise_phone
 from app.core.storage import IMAGE_TYPES, DirectUploadUnsupported, get_storage, sniff_image
 from app.modules.auth.models import User
 from app.modules.business.models import (
@@ -210,6 +211,59 @@ def booking_settings_response(b: Business) -> BookingSettingsResponse:
         bufferMinutes=b.buffer_minutes,
         minLeadMinutes=b.min_lead_minutes,
         maxDaysAhead=b.max_days_ahead,
+    )
+
+
+def invite_email(raw: Optional[str]) -> Optional[str]:
+    """Emails are matched case-insensitively."""
+    return (raw or "").strip().lower() or None
+
+
+def invite_phone(raw: Optional[str]) -> Optional[str]:
+    """E.164 when it's a real number, so "0722 000 111" matches "+254722000111"; otherwise as typed."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        return normalise_phone(raw)
+    except InvalidPhoneNumberError:
+        return raw
+
+
+def invitations_for(user: User):
+    """Pending-invitation filter for this user: their (verified) email or their phone."""
+    matches = []
+    if invite_email(user.email):
+        matches.append(func.lower(TeamInvitation.email) == invite_email(user.email))
+    if invite_phone(user.phone):
+        matches.append(TeamInvitation.phone.in_({user.phone, invite_phone(user.phone)}))
+    return or_(*matches) if matches else None
+
+
+def business_summary(biz: Business, distance_km: float = 0.0) -> BusinessSummaryResponse:
+    """The search-result card. Needs photos, service_categories.services and reviews loaded."""
+    services = [s for cat in (biz.service_categories or []) for s in (cat.services or [])]
+    reviews = list(biz.reviews or [])
+    loc = biz.location or {}
+    photo_urls = [p.url for p in sorted(biz.photos or [], key=lambda p: (not p.is_cover, p.created_at))]
+    if services:
+        cheapest = min(services, key=lambda s: s.price_amount)
+        starting_price = MoneyResponse(amount=cheapest.price_amount, currency=cheapest.price_currency)
+    else:
+        starting_price = MoneyResponse(amount=0, currency="KES")
+    return BusinessSummaryResponse(
+        businessId=biz.id,
+        name=biz.name,
+        categories=biz.categories or [],
+        thumbnailUrl=photo_urls[0] if photo_urls else "",
+        photos=photo_urls,
+        address=loc.get("address", ""),
+        lat=loc.get("lat", 0.0),
+        lng=loc.get("lng", 0.0),
+        distanceKm=distance_km,
+        startingPrice=starting_price,
+        rating=round(sum(r.rating for r in reviews) / len(reviews), 1) if reviews else 0.0,
+        reviewCount=len(reviews),
     )
 
 
@@ -844,7 +898,18 @@ class BusinessService:
     async def set_team_mode(self, business_id: str, user_id: str, data: SetTeamModeRequest) -> TeamModeResponse:
         business = await self._get_owned_business(business_id, user_id)
         business.team_mode = data.team_mode
-        business.onboarding_step = OnboardingStep.TEAM_MODE
+        # Only moves the wizard forward: switching later (e.g. a published solo business adding its
+        # first team member) mustn't send the owner back into setup.
+        steps = list(OnboardingStep)
+        if business.status != BusinessStatus.PUBLISHED and (
+            business.onboarding_step is None or steps.index(OnboardingStep(business.onboarding_step)) < steps.index(OnboardingStep.TEAM_MODE)
+        ):
+            business.onboarding_step = OnboardingStep.TEAM_MODE
+        # A published business going solo needs the owner bookable. Going to team keeps the
+        # owner's Staff row as it is (still bookable, bookings stay theirs; they can drop out of
+        # the schedule by setting their services to none).
+        if business.status == BusinessStatus.PUBLISHED and data.team_mode == TeamMode.SOLO:
+            await self._ensure_owner_staff(business)
         await self.db.commit()
 
         return TeamModeResponse(
@@ -863,13 +928,14 @@ class BusinessService:
     async def _create_invitation(
         self, business: Business, user_id: str, data: InviteTeamMemberRequest, **member_fields
     ) -> TeamInvitation:
-        if not data.email and not data.phone:
+        email, phone = invite_email(data.email), invite_phone(data.phone)
+        if not email and not phone:
             raise _validation_error("email or phone is required")
 
-        for field, value in (("email", data.email), ("phone", data.phone)):
+        for field, value in (("email", email), ("phone", phone)):
             if not value:
                 continue
-            column = getattr(TeamInvitation, field)
+            column = func.lower(TeamInvitation.email) if field == "email" else TeamInvitation.phone
             clash = (
                 await self.db.execute(
                     select(TeamInvitation.status).where(
@@ -892,8 +958,8 @@ class BusinessService:
 
         invitation = TeamInvitation(
             business_id=business.id,
-            email=data.email,
-            phone=data.phone,
+            email=email,
+            phone=phone,
             role=data.role,
             status=InvitationStatus.PENDING,
             invited_by=user_id,
@@ -955,6 +1021,33 @@ class BusinessService:
         for row in rows.scalars():
             mapping[row.staff_id].append(row.service_id)
         return mapping
+
+    async def my_staff_services(self, user_id: uuid_pkg.UUID, business_id: str):
+        """The caller's own services at business_id, with names and prices (staff / front desk)."""
+        from app.modules.business.schemas import MyStaffServiceItem, MyStaffServicesResponse
+
+        bid = self._parse_path_id(business_id, "businessId")
+        staff = (
+            await self.db.execute(select(Staff).where(Staff.business_id == bid, Staff.user_id == user_id))
+        ).scalars().first()
+        if staff is None:
+            raise HTTPException(status_code=404, detail={"error": "not_found", "message": "You don't work at this business"})
+        query = select(Service).where(Service.business_id == bid).order_by(Service.name)
+        if not staff.performs_all_services:
+            mapped = (await self.staff_service_ids([staff.id]))[staff.id]
+            query = query.where(Service.id.in_(mapped or [uuid_pkg.uuid4()]))  # none mapped: no rows
+        services = (await self.db.execute(query)).scalars().all()
+        return MyStaffServicesResponse(
+            staffId=staff.id,
+            allServices=staff.performs_all_services,
+            services=[
+                MyStaffServiceItem(
+                    serviceId=s.id, name=s.name, durationMinutes=s.duration_minutes,
+                    price=MoneyResponse(amount=s.price_amount, currency=s.price_currency),
+                )
+                for s in services
+            ],
+        )
 
     async def get_staff_services(self, business_id: str, user_id: str, staff_id: str) -> StaffServicesResponse:
         business = await self._get_owned_business(business_id, user_id)
@@ -1117,29 +1210,7 @@ class BusinessService:
                 )
 
             if business.team_mode != TeamMode.TEAM:
-                existing_staff = await self.db.execute(
-                    select(Staff).where(
-                        Staff.business_id == business.id,
-                        Staff.user_id == business.owner_id,
-                    )
-                )
-                if not existing_staff.scalar_one_or_none():
-                    owner = await self.db.get(User, business.owner_id)
-                    owner_name = ""
-                    if owner:
-                        owner_name = " ".join(
-                            p for p in (owner.first_name, owner.last_name) if p
-                        ) or owner.email or "Owner"
-                    self.db.add(
-                        Staff(
-                            business_id=business.id,
-                            user_id=business.owner_id,
-                            name=owner_name or "Owner",
-                            role="owner",
-                            specialties=[],
-                            portfolio=[],
-                        )
-                    )
+                await self._ensure_owner_staff(business)
 
         business.status = BusinessStatus.PUBLISHED if data.visible else BusinessStatus.DRAFT
         business.published_at = datetime.now(timezone.utc) if data.visible else None
@@ -1151,6 +1222,28 @@ class BusinessService:
             status=business.status,
             visible=data.visible,
             publishedAt=business.published_at,
+        )
+
+    async def _ensure_owner_staff(self, business: Business) -> None:
+        """The owner's own Staff row (role "owner"), so a solo business has someone to book."""
+        existing = await self.db.execute(
+            select(Staff.id).where(Staff.business_id == business.id, Staff.user_id == business.owner_id)
+        )
+        if existing.first():
+            return
+        owner = await self.db.get(User, business.owner_id)
+        owner_name = ""
+        if owner:
+            owner_name = " ".join(p for p in (owner.first_name, owner.last_name) if p) or owner.email or "Owner"
+        self.db.add(
+            Staff(
+                business_id=business.id,
+                user_id=business.owner_id,
+                name=owner_name or "Owner",
+                role="owner",
+                specialties=[],
+                portfolio=[],
+            )
         )
 
     # ─── My Businesses ────────────────────────────────────────
@@ -1196,14 +1289,12 @@ class BusinessService:
     async def list_my_invitations(self, user_id: str):
         from app.modules.business.schemas import ListMyInvitationsResponse, MyInvitationResponse
         user = await self.db.get(User, user_id)
-        if not user or not user.phone:
+        mine = invitations_for(user) if user else None
+        if mine is None:
             return ListMyInvitationsResponse(invitations=[])
         result = await self.db.execute(
             select(TeamInvitation)
-            .where(
-                TeamInvitation.status == InvitationStatus.PENDING,
-                TeamInvitation.phone == user.phone,
-            )
+            .where(TeamInvitation.status == InvitationStatus.PENDING, mine)
             .order_by(TeamInvitation.sent_at.desc())
         )
         invitations = result.scalars().all()
@@ -1228,7 +1319,10 @@ class BusinessService:
         if invitation.status != InvitationStatus.PENDING:
             raise HTTPException(status_code=409, detail={"error": "already_responded", "message": "This invitation has already been accepted or declined"})
         user = await self.db.get(User, user_id)
-        if not user or not user.phone or user.phone != invitation.phone:
+        mine = invitations_for(user) if user else None
+        if mine is None or not (
+            await self.db.execute(select(TeamInvitation.id).where(TeamInvitation.id == invitation.id, mine))
+        ).first():
             raise HTTPException(status_code=404, detail={"error": "not_found", "message": "No pending invitation found for this id"})
         if data.action == "accept":
             invitation.status = InvitationStatus.ACCEPTED
@@ -1257,6 +1351,9 @@ class BusinessService:
                     role=invitation.role,
                     specialties=[],
                     portfolio=[],
+                    # Front desk isn't bookable until the owner gives them services
+                    # (PUT /businesses/{id}/staff/{staffId}/services).
+                    performs_all_services=invitation.role != "front_desk",
                 )
                 self.db.add(staff)
             # Staff becomes this member's bookable identity (docs/booking/PLAN.md, D3).
@@ -1324,30 +1421,7 @@ class BusinessService:
             if has_coords and radius_km is not None and distance > radius_km:
                 continue
 
-            photo_urls = [p.url for p in sorted(
-                biz.photos or [],
-                key=lambda p: (not p.is_cover, p.created_at),
-            )]
-            if services:
-                cheapest = min(services, key=lambda s: s.price_amount)
-                starting_price = MoneyResponse(amount=cheapest.price_amount, currency=cheapest.price_currency)
-            else:
-                starting_price = MoneyResponse(amount=0, currency="KES")
-
-            summary = BusinessSummaryResponse(
-                businessId=biz.id,
-                name=biz.name,
-                categories=biz.categories or [],
-                thumbnailUrl=photo_urls[0] if photo_urls else "",
-                photos=photo_urls,
-                address=loc.get("address", ""),
-                lat=biz_lat,
-                lng=biz_lng,
-                distanceKm=distance,
-                startingPrice=starting_price,
-                rating=rating,
-                reviewCount=len(reviews),
-            )
+            summary = business_summary(biz, distance)
             published_ts = biz.published_at.timestamp() if biz.published_at else 0.0
             rows.append((distance, published_ts, summary))
 
