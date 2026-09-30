@@ -33,7 +33,7 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | BK-51 | M-Pesa production go-live | M5 | S (weeks of lead time) | BK-01 | | todo |
 | BK-52 | Contract hand-off to the app team | M5 | S | BK-22, BK-31 | | todo |
 | BK-60 | Cancel within policy | Next | M | BK-22 | eslieh | done |
-| BK-61 | Reschedule | Next | M | BK-22, BK-11 | | todo |
+| BK-61 | Reschedule | Next | M | BK-22, BK-11 | eslieh | done |
 | BK-62 | Reminders 24h and 2h before | Next | M | BK-25, BK-40 | | todo |
 | BK-63 | Owner and front-desk bookings (list, walk-in, on-behalf, status) | Next | L | BK-22 | eslieh | done |
 | BK-64 | No-show marking and fee | Next | S | BK-63 | | todo |
@@ -260,6 +260,8 @@ Done (2026-09-27; decision D10: the business refunds by hand): pure `cancellatio
 
 ### BK-61 · Reschedule
 `POST /bookings/{id}/reschedule` `{ date, time }`, which reuses availability and the conflict check atomically and keeps any paid deposit.
+
+Done (2026-09-30; `app/modules/booking/reschedule.py`, `tests/test_reschedule.py`): customers move their own booking to an available slot while cancelling is still free; owner / front desk move any upcoming booking inside working hours; optional new staff; the old slot doesn't block the move; deposit, payment status and hold unchanged; a confirmed booking gets a fresh confirmation SMS.
 
 ### BK-62 · Reminders 24h and 2h before
 Scheduled per booking by `--beat` (scan for confirmed bookings entering each window), idempotent per booking and window. Respect the customer's notification preferences once those exist.

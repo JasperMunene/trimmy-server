@@ -4,6 +4,40 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-09-30 · Reschedule (BK-61)
+
+**Why:** C3 "manage my appointments": move an appointment instead of cancelling and rebooking.
+
+**New endpoint → `booking.json`**
+
+```json
+{
+  "id": "reschedule-booking",
+  "status": "live",
+  "screen": "Reschedule (modal): reuses Select Date & Time; owner calendar drag / edit time",
+  "method": "POST",
+  "path": "/bookings/{bookingId}/reschedule",
+  "auth": "the customer who booked, or the business's owner / front desk",
+  "description": "Moves a pending_payment or confirmed booking that hasn't started. Customer: to a slot from get-availability (the booking's own old slot doesn't block it), and only while cancelling would still be free (before cancel-preview's freeUntil); later, 409 reschedule_window_passed. Owner / front desk: any time inside working hours and in the future, off the slot grid allowed. staffId is optional (omit to keep the current staff). Services, price, deposit, paymentStatus, reference and an unpaid hold's expiresAt all stay the same. A confirmed booking's customer gets a new SMS with the new time.",
+  "request": { "date": "2026-10-05", "time": "15:30", "staffId": "uuid (optional)" },
+  "response": "Booking (new date, time, startsAt, staff)",
+  "errors": [
+    { "status": 409, "code": "slot_unavailable", "message": "The selected time is no longer available" },
+    { "status": 409, "code": "reschedule_window_passed", "message": "It's too late to reschedule in the app; please contact the business" },
+    { "status": 409, "code": "cannot_reschedule", "message": "A cancelled booking can't be rescheduled / This appointment has already started" },
+    { "status": 400, "code": "validation_error", "message": "time is not within the business's working hours for that date (owner / front desk)" },
+    { "status": 404, "code": "not_found", "message": "No booking found for this id" }
+  ]
+}
+```
+
+**App code to update**
+
+- Appointment Detail → Reschedule: open Select Date & Time with the booking's services (and staff), then call this. Use `cancel-preview`'s `freeUntil` to decide whether to show Reschedule at all, or show "contact the business" after it.
+- On `409 slot_unavailable`, refresh the slots and let them pick again.
+
+---
+
 ## 2026-09-30 · staffId in GET /me/businesses
 
 **Why:** staff and front desk can get into their app after accepting an invite (no more testing shortcut): the app needs their `staffId` for My Chair, earnings, payouts and status changes.

@@ -214,3 +214,14 @@ class CancelBookingRequest(BaseModel):
 
 class MarkRefundedRequest(BaseModel):
     reference: Optional[str] = Field(None, max_length=50, examples=["SJK4R2T8QX"])
+
+
+# ─── Rescheduling (BK-61) ────────────────────────────────────
+
+class RescheduleRequest(BaseModel):
+    date: date
+    time: str = Field(..., pattern=r"^([01]\d|2[0-3]):[0-5]\d$", examples=["15:30"])
+    # Optional: move to someone else too. Omit to keep the current staff (or unassigned).
+    staff_id: Optional[uuid_pkg.UUID] = Field(None, alias="staffId")
+
+    model_config = {"populate_by_name": True}

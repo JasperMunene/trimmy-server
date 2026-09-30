@@ -10,6 +10,7 @@ from app.core.dependencies import get_current_verified_user
 from app.modules.auth.models import User
 from app.modules.booking.bookings import BookingsService
 from app.modules.booking.business_bookings import BusinessBookingsService
+from app.modules.booking.reschedule import RescheduleService
 from app.modules.booking.schemas import (
     AssignStaffRequest,
     BookingResponse,
@@ -17,6 +18,7 @@ from app.modules.booking.schemas import (
     CancelBookingRequest,
     CancelPreviewResponse,
     MarkRefundedRequest,
+    RescheduleRequest,
     OwnerBookingRequest,
     ScheduledBookingRequest,
     UpdateBookingStatusRequest,
@@ -138,6 +140,19 @@ async def cancel_booking(
 ):
     """Customer cancels within policy. Any refund is owed by the business, which pays it by hand."""
     return await BookingsService(db).cancel(current_user, booking_id, data.reason)
+
+
+@bookings_router.post("/{booking_id}/reschedule", response_model=BookingResponse)
+async def reschedule_booking(
+    booking_id: str,
+    data: RescheduleRequest,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Move a booking. Customer: their own, to an available slot, while cancelling would still
+    be free. Owner / front desk: any upcoming booking, anywhere inside working hours.
+    The deposit and everything else stay with the booking."""
+    return await RescheduleService(db).reschedule(current_user, booking_id, data)
 
 
 @bookings_router.post("/{booking_id}/refund", response_model=BookingResponse)
