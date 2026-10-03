@@ -4,6 +4,18 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-10-03 · Front desk hidden from customers
+
+**Changed response → `discovery.json#get-business-profile`**: `staff[]` no longer includes front desk members. Only people a customer could book are listed: staff and an owner who takes clients.
+
+- **Favorites:** a front desk member can't be saved (`PUT /me/favorites/staff/{staffId}` → `404`). Any already saved no longer appear in `GET /me/favorites`.
+- **Front desk app:** its staff picker (assign staff, walk-ins) can keep using the profile's `staff[]`, which now holds exactly the bookable people. The full team, front desk included, is still in `list-team-members` (owner).
+- This replaces the earlier note "the public profile lists every accepted staff member … including front desk".
+
+**App code to update:** drop any client-side filtering of `role === "front_desk"` on the profile.
+
+---
+
 ## 2026-10-03 · Staff wallet: statement, adjustments, one wallet across businesses
 
 **Why:** the staff Earnings / wallet screens can now show a real statement. Owners can record tips, bonuses, deductions and advances, and someone working at two salons sees one wallet. Trimmy still never moves this money.
@@ -232,7 +244,7 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 **Answers → `fulfillment.json#frontDeskNote`:**
 
-- **Yes, the public profile lists every accepted staff member**, with or without ratings or photos (`staff[]` is every staff record at the business, including front desk and a solo owner). Each has `role`, `allServices`, `serviceIds` and `workingDays`, so the front desk app can build its staff and service pickers from it.
+- **Yes, the public profile lists every accepted staff member**, with or without ratings or photos (`staff[]` is every staff record at the business, including a solo owner; **front desk are hidden from it since 2026-10-03**). Each has `role`, `allServices`, `serviceIds` and `workingDays`, so the front desk app can build its staff and service pickers from it.
 - **Yes, front desk can call every endpoint marked "owner or front desk"**, now covered by a test: business bookings (all filters incl. `unassigned` and `refund=due`), walk-in, scheduled, assign staff, status changes, reschedule, charge, customers (list and save), mark refunded, day summary and submit. Owner-only stays owner-only: earnings, team management, staff services (set), business settings, payouts approval.
 - Note: the profile only exists for **published** businesses.
 
