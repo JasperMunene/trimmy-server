@@ -4,6 +4,100 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-10-03 · Staff wallet: statement, adjustments, one wallet across businesses
+
+**Why:** the staff Earnings / wallet screens can now show a real statement. Owners can record tips, bonuses, deductions and advances, and someone working at two salons sees one wallet. Trimmy still never moves this money.
+
+**Changed response → `get-payout-balance`** (`/me/payouts/balance` and `/businesses/{id}/staff/{staffId}/payout-balance`): new `tips`, `bonuses`, `deductions` and `advances`.
+
+- `available` = `earned + tips + bonuses - deductions - advances - pending - paid`.
+- `available` **can be negative** after a deduction or an advance. Payout requests are refused until it's back above 0.
+
+**New endpoints → `fulfillment.json`**
+
+```json
+{
+  "id": "get-my-wallet",
+  "status": "live",
+  "screen": "Staff Earnings (wallet), across every business they work at",
+  "method": "GET",
+  "path": "/me/wallet",
+  "auth": "any signed-in user (empty for someone with no staff record)",
+  "response": {
+    "currency": "KES", "earned": 470, "tips": 200, "bonuses": 0, "deductions": 0, "advances": 0,
+    "pending": 0, "paid": 0, "available": 670,
+    "businesses": [
+      { "businessId": "uuid", "businessName": "Glow Beauty", "role": "staff", "staffId": "uuid", "currency": "KES",
+        "earned": 320, "tips": 200, "bonuses": 0, "deductions": 0, "advances": 0, "pending": 0, "paid": 0,
+        "available": 520, "commissionPercent": 40 }
+    ]
+  }
+},
+{
+  "id": "get-wallet-statement",
+  "status": "live",
+  "screen": "Wallet → Transactions; owner Member Detail → Wallet",
+  "method": "GET",
+  "path": "/me/wallet/transactions?businessId=uuid&limit=50&offset=0  |  /businesses/{businessId}/staff/{staffId}/wallet/transactions",
+  "auth": "/me: the staff member (businessId optional: omit for every business); /businesses/…: the owner, or that staff member",
+  "description": "Newest first. amount is the signed effect on the balance; balanceAfter is the balance right after that entry (in the requested scope), so the newest entry's balanceAfter = balance = available. type: commission (a paid booking, dated when it was paid) | tip | bonus | deduction | advance | payout. A payout's amount is negative while pending or paid and 0 once rejected (payoutAmount says what was asked). limit 1-100; pass nextOffset back as offset, null on the last page.",
+  "response": {
+    "currency": "KES", "balance": 420, "total": 4, "nextOffset": null,
+    "entries": [
+      { "entryId": "payout:uuid", "type": "payout", "at": "2026-10-03T12:00:00Z", "amount": -100, "balanceAfter": 420,
+        "businessId": "uuid", "businessName": "Glow Beauty", "description": "Payout requested",
+        "payoutId": "uuid", "payoutStatus": "pending", "payoutAmount": 100 },
+      { "entryId": "tip:uuid", "type": "tip", "at": "…", "amount": 200, "balanceAfter": 520, "description": "Tip: From Amina",
+        "adjustmentId": "uuid", "bookingId": "uuid", "note": "From Amina", "…": "…" },
+      { "entryId": "commission:uuid", "type": "commission", "at": "…", "amount": 320, "balanceAfter": 320,
+        "description": "Commission on BK7F3AQ9 (Amina)", "bookingId": "uuid", "bookingReference": "BK7F3AQ9", "…": "…" }
+    ]
+  }
+},
+{
+  "id": "add-wallet-adjustment",
+  "status": "live",
+  "screen": "Owner Member Detail → Add tip / bonus / deduction / advance; front desk checkout → Add tip",
+  "method": "POST",
+  "path": "/businesses/{businessId}/staff/{staffId}/wallet-adjustments",
+  "auth": "owner (any kind); front desk (tip only)",
+  "description": "tip and bonus add to the wallet; deduction and advance take from it (an advance = cash handed over ahead of a payout). amount is positive KES. bookingId is optional (e.g. the visit a tip was for). The staff member gets a push { type: wallet_adjusted, adjustmentId, businessId }.",
+  "request": { "kind": "tip", "amount": 200, "note": "From Amina", "bookingId": "uuid (optional)" },
+  "response": { "adjustmentId": "uuid", "businessId": "uuid", "staffId": "uuid", "staffName": "Wanjiku", "kind": "tip",
+                "amount": 200, "signedAmount": 200, "currency": "KES", "note": "From Amina", "bookingId": "uuid",
+                "createdAt": "…", "voidedAt": null },
+  "errors": [
+    { "status": 403, "code": "forbidden", "message": "Only the owner can do this (front desk can add tips)" },
+    { "status": 404, "code": "not_found", "message": "staffId / bookingId does not exist for this business" },
+    { "status": 422, "code": "validation_error", "message": "kind must be tip, bonus, deduction or advance; amount > 0" }
+  ]
+},
+{
+  "id": "void-wallet-adjustment",
+  "status": "live",
+  "method": "POST",
+  "path": "/wallet-adjustments/{adjustmentId}/void",
+  "auth": "owner",
+  "description": "Undo a mistaken adjustment: it stays on record (voidedAt set) but no longer counts and leaves the statement. The adjustmentId comes from the add response or a statement entry.",
+  "response": "Adjustment (voidedAt set)",
+  "errors": [{ "status": 409, "code": "already_voided", "message": "This adjustment was already voided" }]
+}
+```
+
+- Payouts are still **requested per business**, because each owner pays their own staff. `POST /payouts` needs `businessId` as before and checks that business's `available`.
+- Tips are recorded by hand: cash handed over, or the owner passing one on. A tip isn't added to the M-Pesa checkout charge.
+- Bookings paid before this change are dated in the statement by their payment (backfilled, migration `024`).
+
+**App code to update**
+
+- Staff wallet: show `GET /me/wallet` totals, a per-business row when there's more than one, and a Transactions list from `/me/wallet/transactions` with infinite scroll on `nextOffset`.
+- Payout request: pick the business (use that row's `available`).
+- Owner Member Detail: an "Adjust wallet" action (kind, amount, note) and the statement. A long-press "Void" on adjustments.
+- Front desk checkout: optional "Add tip for {staff}" after a charge (kind `tip`, `bookingId`).
+- Notification tap `wallet_adjusted` → the wallet.
+
+---
+
 ## 2026-09-30 · Amenities on update-business-info (P3)
 
 **Fixed → `business-setup.json#update-business-info` (issues)**:

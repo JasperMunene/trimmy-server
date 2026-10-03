@@ -201,6 +201,7 @@ async def mark_charged(db: AsyncSession, booking: Booking, *, reason: str, actor
     from app.modules.business.models import Staff
 
     booking.payment_status = BookingPaymentStatus.PAID
+    booking.paid_at = datetime.now(timezone.utc)
     staff = await db.get(Staff, booking.staff_id) if booking.staff_id else None
     if staff is not None and staff.commission_percent:
         booking.staff_commission = math.floor(booking.total_amount * staff.commission_percent / 100)

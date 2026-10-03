@@ -112,6 +112,8 @@ class Booking(Base):
     # The assigned staff member's commission on this booking, fixed when it's paid
     # (total x their commission percent then), so later rate changes don't rewrite it.
     staff_commission: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # When the balance was settled (payment_status became paid): the commission's date in the wallet.
+    paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     # Set when each reminder SMS is claimed for sending (BK-62), so it goes out once;
     # rescheduling clears them for the new time.
     reminder_24h_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
