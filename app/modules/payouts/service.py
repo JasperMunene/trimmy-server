@@ -4,11 +4,10 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import HTTPException
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auth.models import User
-from app.modules.booking.models import Booking, PaymentStatus as BookingPaymentStatus
 from app.modules.business.models import Business, Staff
 from app.modules.payouts.models import Payout, PayoutStatus
 from app.modules.payouts.schemas import ListPayoutsResponse, PayoutBalanceResponse, PayoutResponse
@@ -52,28 +51,9 @@ class PayoutsService:
     # ─── balance ─────────────────────────────────────────────
 
     async def balance_for(self, staff: Staff) -> PayoutBalanceResponse:
-        earned = (
-            await self.db.execute(
-                select(func.coalesce(func.sum(Booking.staff_commission), 0)).where(
-                    Booking.staff_id == staff.id, Booking.payment_status == BookingPaymentStatus.PAID
-                )
-            )
-        ).scalar_one()
-        totals = dict(
-            (
-                await self.db.execute(
-                    select(Payout.status, func.coalesce(func.sum(Payout.amount), 0))
-                    .where(Payout.staff_id == staff.id, Payout.status.in_([PayoutStatus.PENDING, PayoutStatus.PAID]))
-                    .group_by(Payout.status)
-                )
-            ).all()
-        )
-        pending, paid = int(totals.get(PayoutStatus.PENDING, 0)), int(totals.get(PayoutStatus.PAID, 0))
-        return PayoutBalanceResponse(
-            businessId=staff.business_id, staffId=staff.id, currency="KES", earned=int(earned),
-            pending=pending, paid=paid, available=int(earned) - pending - paid,
-            commissionPercent=staff.commission_percent,
-        )
+        from app.modules.payouts.wallet import WalletService
+
+        return await WalletService(self.db, self.now).balance_for(staff)
 
     async def my_balance(self, user: User, business_id: str) -> PayoutBalanceResponse:
         bid = self._uuid(business_id, "No business found for this id")
