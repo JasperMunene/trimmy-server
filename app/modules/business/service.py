@@ -1508,7 +1508,8 @@ class BusinessService:
             for s in (cat.services or [])
         ]
 
-        staff_rows = sorted(business.staff or [], key=lambda st: st.created_at)
+        # Customers only see people they could book: front desk is staff-facing only.
+        staff_rows = sorted((st for st in business.staff or [] if st.role != "front_desk"), key=lambda st: st.created_at)
         mapped = await self.staff_service_ids([st.id for st in staff_rows if not st.performs_all_services])
         staff = [
             StaffMemberResponse(
