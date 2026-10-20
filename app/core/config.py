@@ -100,6 +100,13 @@ class Settings(BaseSettings):
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/google/authorized"
     # Where the callback sends the user afterwards, per platform.
     GOOGLE_WEB_REDIRECT_URL: str = "http://localhost:8081/auth/google"
+    # Where a web app may ask to be sent back to (GET /auth/google/url?redirect_uri=), exact URLs
+    # only, so a sign-in code can never be sent to someone else's site. Add the deployed web app's
+    # https://<domain>/auth/google here (env: a JSON list).
+    GOOGLE_WEB_REDIRECT_ALLOWLIST: List[str] = [
+        "http://localhost:3000/auth/google",
+        "http://localhost:8081/auth/google",
+    ]
     GOOGLE_MOBILE_REDIRECT_URL: str = "trimmy://auth/google"
 
     RATE_LIMIT_LOGIN: str = "5/minute"
