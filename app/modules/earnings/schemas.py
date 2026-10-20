@@ -68,6 +68,9 @@ class MoneyResponse(BaseModel):
     no_show_fees: int = Field(alias="noShowFees")  # kept from no-shows' deposits
     refunds_due: int = Field(alias="refundsDue")  # the business still owes these back
     refunds_paid: int = Field(alias="refundsPaid")
+    # Tips paid together with checkout charges. Included in `collected` (the money came in) but not in
+    # totalRevenue: the business owes it on to its staff, through their wallets.
+    tips: int = 0
     collected: List[CollectedRow]  # every successful payment, by method and kind
 
     model_config = {"populate_by_name": True}

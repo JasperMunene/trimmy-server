@@ -4,6 +4,30 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-10-20 · Business bookings reach the customer's app; tips at checkout; earnings by payment date
+
+**Customer matching (walk-in, scheduled):**
+- When the phone or email given belongs to a Trimmy account, the booking is linked to that account: it shows in their app and they get its notifications. The response has `customerHasAccount: true`.
+- Only proven contacts count: a phone verified with a code, or an email verified at signup or by Google. Changing your phone in the profile un-verifies it (`users.phone_verified_at`, migration `028`).
+- Someone who signs up later with that phone or email takes over their bookings from the last 180 days.
+
+**Tips → `fulfillment.json#charge-booking`:**
+- Optional `tip`, charged together with the balance: one M-Pesa prompt, or one cash record.
+- When the payment succeeds, the tip goes to the staff member's wallet as a `tip` linked to the booking, they're notified, and the booking's `tip` is set.
+- It isn't revenue or commission: `money.tips` in earnings, `collected.tips` in the day summary.
+- `400 tip_needs_staff` if nobody is assigned.
+
+**Earnings dates:** paid bookings now count on the day they were paid, not the day they were booked for. This is the same as the wallet and the day summary. A future appointment done and charged today now shows in today's earnings.
+
+**App:** done.
+- The charge sheet has tip quick picks (None / 50 / 100 / 200) plus "Other amount", and the totals update.
+- The Payment card shows the tip.
+- The customer card shows "On Trimmy" for linked bookings.
+- The day summary has a "Tips for staff" line.
+- The separate after-checkout tip only shows when no tip came with the charge.
+
+---
+
 ## 2026-10-20 · Staff time off (S4), and one payout by id
 
 **New endpoints → `team.json`:**

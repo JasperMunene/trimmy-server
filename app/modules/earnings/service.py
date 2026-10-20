@@ -4,7 +4,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -119,6 +119,7 @@ class EarningsService:
                 "noShowFees": current.no_show_fees,
                 "refundsDue": current.refunds_due,
                 "refundsPaid": current.refunds_paid,
+                "tips": current.tips,
                 "collected": current.collected,
             },
             previous={
@@ -134,13 +135,15 @@ class EarningsService:
     async def _load(
         self, business_id: uuid_pkg.UUID, start: datetime, end: datetime, staff_id: Optional[uuid_pkg.UUID], tz: ZoneInfo
     ) -> tuple[list[agg.BookingRow], list[agg.PaymentRow]]:
-        """Bookings starting in [start, end) with their lines and successful payments: three queries."""
+        """Bookings booked for, or paid in, [start, end), with their lines and successful payments:
+        three queries. summarise() decides which day each counts on (BookingRow.when)."""
+        lo, hi = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
         query = (
             select(Booking)
             .where(
                 Booking.business_id == business_id,
-                Booking.starts_at >= start.astimezone(timezone.utc),
-                Booking.starts_at < end.astimezone(timezone.utc),
+                or_(and_(Booking.starts_at >= lo, Booking.starts_at < hi),
+                    and_(Booking.paid_at >= lo, Booking.paid_at < hi)),
             )
             .options(selectinload(Booking.lines))
         )
@@ -187,8 +190,9 @@ class EarningsService:
                 no_show_fee=b.no_show_fee or 0,
                 refund_amount=b.refund_amount or 0,
                 refund_status=b.refund_status,
+                paid_at=_aware(b.paid_at).astimezone(tz) if b.paid_at else None,
             )
             for b in bookings
         ]
-        payments = [agg.PaymentRow(p.booking_id, p.kind, p.provider, p.amount) for p in succeeded]
+        payments = [agg.PaymentRow(p.booking_id, p.kind, p.provider, p.amount, p.tip_amount or 0) for p in succeeded]
         return rows, payments

@@ -67,7 +67,7 @@ class PaymentsService:
         )
         return self._started(payment, push, expires_at=_aware(booking.expires_at))
 
-    async def charge(self, user: User, booking_id: str, method: str, phone: Optional[str]):
+    async def charge(self, user: User, booking_id: str, method: str, phone: Optional[str], tip: int = 0):
         """The final charge at checkout (fulfillment.json#charge-booking), owner or front desk.
 
         Returns (status_code, body): 200 with the completed Booking for cash (or when
@@ -91,23 +91,27 @@ class PaymentsService:
         if booking.status not in (BookingStatus.IN_PROGRESS, BookingStatus.COMPLETED):
             raise _error(409, "not_in_progress", "Only an in-progress or completed appointment can be charged")
 
+        if tip and booking.staff_id is None:
+            raise _error(400, "tip_needs_staff", "Assign a staff member first, so the tip has someone to go to")
+
         balance = max(booking.total_amount - deposit_paid(booking), 0)
-        if method == "cash" or balance == 0:
-            if balance > 0:
+        due = balance + tip  # one payment: the balance and the tip together
+        if method == "cash" or due == 0:
+            if due > 0:
                 self.db.add(Payment(
                     id=uuid_pkg.uuid4(), booking_id=booking.id, kind=PaymentKind.CHARGE, provider="cash",
-                    amount=balance, currency=booking.currency, phone="", destination_type="cash", party_b="",
-                    account_reference=booking.reference, status=PaymentStatus.SUCCEEDED, settled_at=self.now,
+                    amount=due, tip_amount=tip, currency=booking.currency, phone="", destination_type="cash",
+                    party_b="", account_reference=booking.reference, status=PaymentStatus.SUCCEEDED, settled_at=self.now,
                 ))
             await self.db.refresh(booking, ["events"])
-            await mark_charged(self.db, booking, reason="cash" if balance else "nothing_due", actor_id=user.id)
+            await mark_charged(self.db, booking, reason="cash" if due else "nothing_due", actor_id=user.id, tip=tip)
             await self.db.commit()
             return 200, await BookingsService(self.db, self.now).get_response(booking.id)
 
         payment, push = await self._push(
-            booking, kind=PaymentKind.CHARGE, amount=balance, phone=phone, description="Payment",
+            booking, kind=PaymentKind.CHARGE, amount=due, phone=phone, description="Payment",
             already_paid="This appointment is already paid",
-            busy="An M-Pesa prompt was just sent; wait for the customer to respond",
+            busy="An M-Pesa prompt was just sent; wait for the customer to respond", tip=tip,
         )
         return 202, self._started(payment, push, expires_at=None)
 
@@ -122,7 +126,7 @@ class PaymentsService:
 
     async def _push(
         self, booking: Booking, *, kind: str, amount: int, phone: Optional[str], description: str,
-        already_paid: str, busy: str,
+        already_paid: str, busy: str, tip: int = 0,
     ) -> tuple[Payment, "StkPushResult"]:
         """Guards, routing and the STK push, shared by deposits and checkout charges."""
         attempts = (
@@ -159,7 +163,7 @@ class PaymentsService:
             raise _error(503, "payments_unavailable", "Payments are temporarily unavailable")
 
         payment = Payment(
-            id=uuid_pkg.uuid4(), booking_id=booking.id, kind=kind, amount=amount,
+            id=uuid_pkg.uuid4(), booking_id=booking.id, kind=kind, amount=amount, tip_amount=tip,
             currency=booking.currency, phone=msisdn, destination_type=destination.type,
             party_b=route.party_b, account_reference=route.account_reference,
         )
@@ -192,9 +196,9 @@ class PaymentsService:
         )
 
 
-async def mark_charged(db: AsyncSession, booking: Booking, *, reason: str, actor_id=None) -> None:
-    """The balance is settled: complete the visit, mark it paid, and fix the staff
-    member's commission on it (payouts). The caller commits."""
+async def mark_charged(db: AsyncSession, booking: Booking, *, reason: str, actor_id=None, tip: int = 0) -> None:
+    """The balance is settled: complete the visit, mark it paid, fix the staff member's commission
+    on it (payouts) and credit any tip paid with it to their wallet. The caller commits."""
     import math
 
     from app.modules.booking.states import transition
@@ -204,7 +208,11 @@ async def mark_charged(db: AsyncSession, booking: Booking, *, reason: str, actor
     booking.paid_at = datetime.now(timezone.utc)
     staff = await db.get(Staff, booking.staff_id) if booking.staff_id else None
     if staff is not None and staff.commission_percent:
+        # On the services only: a tip is all theirs, through the wallet below.
         booking.staff_commission = math.floor(booking.total_amount * staff.commission_percent / 100)
+    if tip > 0 and staff is not None:
+        from app.modules.payouts.wallet import credit_checkout_tip
+        await credit_checkout_tip(db, booking, staff, tip, created_by=actor_id)
     if booking.status == BookingStatus.IN_PROGRESS:
         transition(booking, BookingStatus.COMPLETED, actor_id=actor_id, reason=f"charged: {reason}"[:100])
     # The receipt (and review prompt). Once per booking, however it was completed.

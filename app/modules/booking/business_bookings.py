@@ -215,12 +215,16 @@ class BusinessBookingsService:
             await self.db.rollback()
             raise _error(409, "slot_unavailable", "This time is no longer available")
 
+        from app.modules.booking.customer_match import match_account
         from app.modules.customers.service import clean_phone, remember_customer
 
         phone = clean_phone(data.customer_phone)
         booking = Booking(
             id=uuid_pkg.uuid4(),
             business_id=ctx.business.id,
+            # A Trimmy account with this proven phone / email: the booking shows in their app and
+            # they get its notifications (customer_match.py).
+            customer_id=await match_account(self.db, phone, data.customer_email),
             staff_id=data.staff_id,
             source=BookingSource.WALK_IN,  # business-recorded, per fulfillment.json
             starts_at=start.astimezone(timezone.utc),
@@ -253,8 +257,10 @@ class BusinessBookingsService:
             await self.db.rollback()
             raise _error(409, "slot_unavailable", "This time is no longer available")
         from app.modules.booking import tasks as booking_tasks
-        if booking.status == BookingStatus.CONFIRMED and booking.customer_phone:
-            await booking_tasks.notify_confirmed(booking.id)  # on-behalf bookings; walk-ins are already here
+        if booking.status == BookingStatus.CONFIRMED and (booking.customer_phone or booking.customer_id or booking.customer_email):
+            # On-behalf bookings: SMS if there's a phone; in the app and by email as their settings
+            # allow when it's their account; email for a guest. Walk-ins are already here.
+            await booking_tasks.notify_confirmed(booking.id)
         if booking.staff_id:
             await booking_tasks.push_update(booking.id, "assigned", actor_id=user.id)
         return await self.bookings.get_response(booking.id)

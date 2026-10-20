@@ -218,6 +218,12 @@ class GoogleAuthService:
         await self.db.refresh(user)
         return AuthResponse(user=UserResponse.model_validate(user), tokens=tokens)
 
+    async def _claim(self, user: User) -> None:
+        """Google proved the email: bookings a business made for it become theirs (customer_match.py)."""
+        from app.modules.booking.customer_match import claim_bookings
+
+        await claim_bookings(self.db, user)
+
     async def _find_or_link_user(self, claims: dict) -> User:
         sub, email = str(claims["sub"]), claims["email"]
         now = datetime.now(timezone.utc)
@@ -241,6 +247,7 @@ class GoogleAuthService:
                 user.verified = True
                 user.verified_at = now
             user.google_sub = sub
+            await self._claim(user)
             return user
 
         user = User(
@@ -254,4 +261,5 @@ class GoogleAuthService:
         )
         self.db.add(user)
         await self.db.flush()
+        await self._claim(user)
         return user

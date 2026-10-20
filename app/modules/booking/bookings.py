@@ -569,6 +569,7 @@ class BookingsService:
             customerName=booking.customer_name,
             customerPhone=booking.customer_phone,
             customerEmail=booking.customer_email,
+            customerHasAccount=booking.customer_id is not None,
             staffId=booking.staff_id,
             staffName=staff.name if staff else ANY_STAFF_NAME,
             services=[
@@ -593,6 +594,7 @@ class BookingsService:
             expiresAt=_aware(booking.expires_at) if booking.expires_at else None,
             cancelReason=booking.cancel_reason,
             depositPayment=_payment_response(deposit),
+            tip=Money(amount=booking.tip_amount, currency=booking.currency) if booking.tip_amount else None,
             depositPaid=(
                 Money(amount=deposit.amount, currency=booking.currency)
                 if deposit is not None and deposit.status == "succeeded" else None

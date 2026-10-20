@@ -284,3 +284,31 @@ class WalletService:
         await self.db.commit()
         await self.db.refresh(adjustment)
         return adjustment_response(adjustment)
+
+
+async def credit_checkout_tip(db: AsyncSession, booking, staff, amount: int, created_by=None) -> None:
+    """A tip paid together with the checkout charge (payments/service.py): onto the staff member's
+    wallet as a `tip` linked to the booking, and recorded on the booking, so the money that came in
+    splits cleanly into the business's revenue and what it owes the staff member. They're told once
+    the payment commits. The caller commits."""
+    from app.modules.notifications.after_commit import notify_after_commit
+    from app.modules.notifications.tasks import notify
+
+    if amount <= 0:
+        return
+    if created_by is None:  # an M-Pesa callback: nobody's signed in; the business stands behind it
+        business = await db.get(Business, booking.business_id)
+        created_by = business.owner_id
+    booking.tip_amount = (booking.tip_amount or 0) + amount
+    db.add(WalletAdjustment(
+        id=uuid_pkg.uuid4(), business_id=booking.business_id, staff_id=staff.id, staff_name=staff.name,
+        kind=AdjustmentKind.TIP, amount=amount, currency=booking.currency,
+        note=f"Tip from {booking.customer_name} ({booking.reference})", booking_id=booking.id, created_by=created_by,
+    ))
+    if staff.user_id:
+        # Plain values: the ORM rows are expired by the time the commit hook runs.
+        user_id, text = staff.user_id, f"{booking.customer_name} tipped you {booking.currency} {amount:,}. It's in your wallet."
+        business_id, booking_id = booking.business_id, booking.id
+        notify_after_commit(db, lambda: notify(
+            user_id, "You got a tip", text, type="wallet_adjusted", businessId=business_id, bookingId=booking_id,
+        ))

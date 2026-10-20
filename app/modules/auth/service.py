@@ -170,6 +170,9 @@ class AuthService:
         user.phone = data.phone
         user.verified = True
         user.verified_at = datetime.now(timezone.utc)
+        # Bookings a business made for this proven phone / email become theirs (customer_match.py).
+        from app.modules.booking.customer_match import claim_bookings
+        await claim_bookings(self.db, user)
 
         await self.db.delete(auth_token)
         tokens = self._issue_tokens(user)
@@ -268,6 +271,10 @@ class AuthService:
         user.email = data.email
         user.verified = True
         user.verified_at = datetime.now(timezone.utc)
+        user.phone_verified_at = user.verified_at  # the SMS code just proved it
+        # Bookings a business made for this proven phone / email become theirs (customer_match.py).
+        from app.modules.booking.customer_match import claim_bookings
+        await claim_bookings(self.db, user)
 
         await self.db.delete(auth_token)
         tokens = self._issue_tokens(user)
@@ -367,6 +374,9 @@ class AuthService:
 
         user.verified = True
         user.verified_at = datetime.now(timezone.utc)
+        # Bookings a business made for this proven phone / email become theirs (customer_match.py).
+        from app.modules.booking.customer_match import claim_bookings
+        await claim_bookings(self.db, user)
         await self.db.delete(auth_token)
         tokens = self._issue_tokens(user)
 
@@ -423,6 +433,8 @@ class AuthService:
                         detail={"error": "phone_taken", "message": "Phone number is already in use"},
                     )
             user.phone = data.phone
+            # Not proven by a code: it no longer links bookings to this account (customer_match.py).
+            user.phone_verified_at = None
 
         await self.db.commit()
         await self.db.refresh(user)

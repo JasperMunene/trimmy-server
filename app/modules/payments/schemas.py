@@ -14,6 +14,9 @@ class ChargeRequest(BaseModel):
     method: str = Field(..., pattern=r"^(mpesa|cash)$")
     # For M-Pesa: the number to prompt. Defaults to the booking's customer phone.
     phone: Optional[str] = Field(None, examples=["0712345678"])
+    # A tip for the booking's staff member, charged together with the balance. It goes to their
+    # wallet once the payment succeeds, not to the business's revenue.
+    tip: int = Field(0, ge=0, le=100_000)
 
 
 class StartPaymentResponse(BaseModel):

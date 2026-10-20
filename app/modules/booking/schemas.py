@@ -154,6 +154,8 @@ class BookingResponse(BaseModel):
     customer_name: str = Field(alias="customerName")
     customer_phone: Optional[str] = Field(None, alias="customerPhone")
     customer_email: Optional[str] = Field(None, alias="customerEmail")
+    # Linked to the customer's Trimmy account: they see it in their app and get its notifications.
+    customer_has_account: bool = Field(False, alias="customerHasAccount")
     staff_id: Optional[uuid_pkg.UUID] = Field(None, alias="staffId")
     staff_name: str = Field(alias="staffName")  # "Any available" while unassigned
     services: List[BookingLineResponse]
@@ -165,6 +167,8 @@ class BookingResponse(BaseModel):
     deposit_amount: Optional[Money] = Field(None, alias="depositAmount")
     # BK-34: the deposit actually paid (null if none was, or it hasn't been yet).
     deposit_paid: Optional[Money] = Field(None, alias="depositPaid")
+    # A tip paid with the checkout charge (for the staff member, through their wallet).
+    tip: Optional[Money] = None
     status: str
     source: str
     payment_status: str = Field(alias="paymentStatus")  # unpaid | deposit_paid | paid

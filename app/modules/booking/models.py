@@ -90,7 +90,7 @@ class Booking(Base):
 
     # Snapshot at booking time, so the business keeps the details if the account changes.
     customer_name: Mapped[str] = mapped_column(Text, nullable=False)
-    customer_phone: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    customer_phone: Mapped[Optional[str]] = mapped_column(Text, nullable=True, index=True)
     customer_email: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
@@ -114,6 +114,8 @@ class Booking(Base):
     staff_commission: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # When the balance was settled (payment_status became paid): the commission's date in the wallet.
     paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # A tip paid with the checkout charge; it goes to the staff member's wallet, not the business's revenue.
+    tip_amount: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # Set when each reminder SMS is claimed for sending (BK-62), so it goes out once;
     # rescheduling clears them for the new time.
     reminder_24h_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
