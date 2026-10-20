@@ -64,7 +64,7 @@ def make_client(daraja, env="production", **kwargs):
     now = [1000.0]
     client = MpesaClient(
         env=env, consumer_key="key", consumer_secret="secret", shortcode="1234567",
-        passkey="passkey", callback_url="https://api.trimmy.com/api/v1/payments/mpesa/callback/s3cret",
+        passkey="passkey", callback_url="https://api.trimmy.com/api/v1/payments/stk/callback/s3cret",
         transport=httpx.MockTransport(daraja.handler), clock=lambda: now[0], **kwargs,
     )
     return client, now
@@ -89,7 +89,7 @@ def test_route_bank_uses_bank_paybill_and_account():
 
 
 @pytest.mark.parametrize("dest,code", [
-    (destination(type="bank_account", bank_shortcode="247247", bank_account_number="1234567890123"), "invalid_account_reference"),
+    (destination(type="bank_account", bank_shortcode="247247", bank_account_number="123456789012345678901"), "invalid_account_reference"),
     (destination(type="mpesa_paybill", paybill_number="400200", paybill_account_number=""), "invalid_account_reference"),
     (destination(type="mpesa_till", till_number="12"), "invalid_destination"),
     (destination(type="cheque"), "unsupported_destination"),
@@ -261,10 +261,10 @@ def test_from_settings_appends_callback_secret(monkeypatch):
     from app.core.config import settings
     for name, value in dict(
         MPESA_ENV="production", MPESA_CONSUMER_KEY="k", MPESA_CONSUMER_SECRET="s", MPESA_SHORTCODE="1234567",
-        MPESA_PASSKEY="p", MPESA_CALLBACK_URL="https://api.trimmy.com/api/v1/payments/mpesa/callback/", MPESA_CALLBACK_SECRET="abc",
+        MPESA_PASSKEY="p", MPESA_CALLBACK_URL="https://api.trimmy.com/api/v1/payments/stk/callback/", MPESA_CALLBACK_SECRET="abc",
     ).items():
         monkeypatch.setattr(settings, name, value)
-    assert MpesaClient.from_settings().callback_url == "https://api.trimmy.com/api/v1/payments/mpesa/callback/abc"
+    assert MpesaClient.from_settings().callback_url == "https://api.trimmy.com/api/v1/payments/stk/callback/abc"
     monkeypatch.setattr(settings, "MPESA_CALLBACK_SECRET", "")
     with pytest.raises(MpesaConfigError):
         MpesaClient.from_settings()
@@ -286,14 +286,14 @@ def callback_secret(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_callback_route_acknowledges(client, callback_secret):
-    resp = await client.post(f"/api/v1/payments/mpesa/callback/{callback_secret}", json=CALLBACK)
+    resp = await client.post(f"/api/v1/payments/stk/callback/{callback_secret}", json=CALLBACK)
     assert resp.status_code == 200
     assert resp.json() == {"ResultCode": 0, "ResultDesc": "Accepted"}
 
 
 @pytest.mark.asyncio
 async def test_callback_route_wrong_secret_is_404(client, callback_secret):
-    resp = await client.post("/api/v1/payments/mpesa/callback/guess", json=CALLBACK)
+    resp = await client.post("/api/v1/payments/stk/callback/guess", json=CALLBACK)
     assert resp.status_code == 404
 
 
@@ -301,11 +301,11 @@ async def test_callback_route_wrong_secret_is_404(client, callback_secret):
 async def test_callback_route_disabled_without_secret(client, monkeypatch):
     from app.core.config import settings
     monkeypatch.setattr(settings, "MPESA_CALLBACK_SECRET", "")
-    resp = await client.post("/api/v1/payments/mpesa/callback/anything", json=CALLBACK)
+    resp = await client.post("/api/v1/payments/stk/callback/anything", json=CALLBACK)
     assert resp.status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_callback_route_rejects_garbage(client, callback_secret):
-    resp = await client.post(f"/api/v1/payments/mpesa/callback/{callback_secret}", json={"nope": 1})
+    resp = await client.post(f"/api/v1/payments/stk/callback/{callback_secret}", json={"nope": 1})
     assert resp.status_code == 400

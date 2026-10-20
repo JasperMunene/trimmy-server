@@ -57,7 +57,7 @@ async def charge_booking(
     return JSONResponse(status_code=code, content=jsonable_encoder(body, by_alias=True))
 
 
-@router.post("/mpesa/callback/{secret}", include_in_schema=False)
+@router.post("/stk/callback/{secret}", include_in_schema=False)
 async def mpesa_callback(secret: str, request: Request, db: AsyncSession = Depends(get_db)):
     """Daraja posts STK push results here (the URL comes from MPESA_CALLBACK_URL + secret).
 

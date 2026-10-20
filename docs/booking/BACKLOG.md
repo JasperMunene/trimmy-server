@@ -183,7 +183,7 @@ A pure function: `(services with quantities, policies) -> { total, deposit | Non
 - Also: the payment row is written before the push (a crash mid-call still leaves a trace) and records the routing used; the booking's `depositPayment` shows the latest attempt; tests blank all M-Pesa settings so they can never send a real push.
 
 ### BK-32 · M-Pesa callback endpoint
-`POST /payments/mpesa/callback/{secret}`: public, but the secret in the path must match.
+`POST /payments/stk/callback/{secret}`: public, but the secret in the path must match.
 
 *Started in BK-30:* the route exists in `app/modules/payments/router.py` and verifies the secret, parses the payload and logs it. What's left is everything below that touches the database.
 
@@ -216,9 +216,11 @@ The sandbox doesn't validate `PartyB`, so routing to a till or paybill Trimmy do
 - [ ] Ask Safaricom during go-live whether this routing needs special approval on Trimmy's shortcode.
 
 ### BK-36 · Payment destinations fit Daraja limits; merge bank lists
-Daraja caps `AccountReference` at 12 characters, but the server accepts bank and paybill account numbers up to 34 and 50.
+Daraja documents a 12-character cap on `AccountReference`; we allow 20 so longer bank account numbers fit. The server used to accept up to 34 (bank) and 50 (paybill).
 
-- [ ] Payment-destination validation limits `paybillAccountNumber` and `bankAccountNumber` to 12 characters (letters, digits, `-_/.` and spaces, as in the prototype), with a clear message. Check existing saved destinations and list any that no longer pass.
+- [x] Payment-destination validation limits `paybillAccountNumber` and `bankAccountNumber` to 20 characters (paybill: letters, digits, `-_/.` and spaces; bank: 5-20 letters or digits), matching the STK push check.
+- [ ] Check existing saved destinations and list any that no longer pass.
+- [ ] Confirm in production that a 13-20 character account reference is accepted and credited to the right account (not truncated).
 - [ ] Merge the bank lists: the prototype has Bank of Africa, ABC Bank and Bank of Baroda, which `app/modules/business/payment_options.py` doesn't. Verify every shortcode before it goes live.
 
 ## M4: Notifications

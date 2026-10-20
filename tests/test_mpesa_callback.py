@@ -31,7 +31,7 @@ def callback(checkout_id, code=0, receipt="SJK4R2T8QX", amount=300):
 
 
 async def post_callback(client, payload):
-    resp = await client.post(f"/api/v1/payments/mpesa/callback/{SECRET}", json=payload)
+    resp = await client.post(f"/api/v1/payments/stk/callback/{SECRET}", json=payload)
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"ResultCode": 0, "ResultDesc": "Accepted"}
 
