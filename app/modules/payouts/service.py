@@ -130,6 +130,19 @@ class PayoutsService:
             query = query.where(Payout.status == status)
         return ListPayoutsResponse(payouts=[_response(p) for p in (await self.db.execute(query)).scalars()])
 
+    async def get(self, user: User, payout_id: str) -> PayoutResponse:
+        """One payout: for its business's owner, or the staff member who asked. 404 for anyone else."""
+        from app.modules.booking.business_bookings import OWNER
+
+        not_found = _error(404, "not_found", "payoutId does not exist")
+        payout = await self.db.get(Payout, self._uuid(payout_id, "payoutId does not exist"))
+        if payout is None:
+            raise not_found
+        role, me = await self._business_role(user, payout.business_id)
+        if role != OWNER and (me is None or me.id != payout.staff_id):
+            raise not_found
+        return _response(payout)
+
     async def respond(self, user: User, payout_id: str, action: str, rejection_reason: Optional[str]) -> PayoutResponse:
         """Owner only. approve = "I've paid them myself"; no money moves through Trimmy."""
         not_found = _error(404, "not_found", "payoutId does not exist for this business")

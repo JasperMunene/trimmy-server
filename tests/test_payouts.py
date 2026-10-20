@@ -126,3 +126,17 @@ async def test_permissions(client, auth_headers, salon, stylist, customer, db_se
     payout = (await request(client, stylist, salon, 100)).json()
     assert (await client.post(f"/api/v1/payouts/{payout['payoutId']}/respond", json={"action": "approve"}, headers=stylist)).status_code == 404
     assert (await request(client, stylist, salon, 0)).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_get_one_payout(client, auth_headers, salon, stylist, db_session):
+    from tests.test_read_bookings import headers_for, make_user
+
+    await paid_visit(client, auth_headers, salon)
+    payout_id = (await request(client, stylist, salon, 100)).json()["payoutId"]
+    url = f"/api/v1/payouts/{payout_id}"
+    assert (await client.get(url, headers=auth_headers)).json()["amount"] == 100  # the owner
+    assert (await client.get(url, headers=stylist)).json()["status"] == "pending"  # who asked
+    stranger = headers_for(await make_user(db_session, "payout.stranger@example.com"))
+    assert (await client.get(url, headers=stranger)).status_code == 404
+    assert (await client.get("/api/v1/payouts/not-an-id", headers=auth_headers)).status_code == 404

@@ -4,6 +4,25 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-10-20 · Staff time off (S4), and one payout by id
+
+**New endpoints → `team.json`:**
+- `GET /businesses/{businessId}/time-off?from=&to=[&staffId=]`: the owner and front desk see everyone's; staff see their own.
+- `POST /businesses/{businessId}/staff/{staffId}/time-off`: `{date, start, end}` or `{date, allDay: true, until?}`, in business-local time. `409 has_bookings` (with `references`) if they have bookings then.
+- `DELETE /time-off/{timeOffId}`.
+
+Time off works like a booking for that person on every availability path: customer slots, new bookings, walk-ins, on-behalf bookings, reschedule and assign. Migration `027`.
+
+**New endpoint → `fulfillment.json#get-payout`:** `GET /payouts/{payoutId}` for the owner or the staff member who asked.
+
+**App:** done.
+- Staff Menu → Time off.
+- Owner: Team → member → Time off.
+- Front desk Today is now a staff × time day grid (F1) that shows time off; tap a name to manage theirs.
+- Payout detail loads itself, so a `payout_requested` notification opens it directly.
+
+---
+
 ## 2026-10-20 · Deposit receipt and destination on the booking (BK-34)
 
 **Changed response → the Booking (create / get / list, business bookings):**

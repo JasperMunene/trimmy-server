@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 from enum import Enum as PyEnum
 from typing import Optional
 
-from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, String, Text, func, text
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import ExcludeConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -186,3 +186,28 @@ class BookingEvent(Base):
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
     booking: Mapped["Booking"] = relationship(back_populates="events")
+
+
+class StaffTimeOff(Base):
+    """Time a staff member can't take bookings (S4): a doctor's appointment, a day off. Availability
+    treats it like a booking for that person, so it's never offered or booked over."""
+
+    __tablename__ = "staff_time_off"
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(UUID, primary_key=True, default=uuid4)
+    business_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID, ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False
+    )
+    staff_id: Mapped[uuid_pkg.UUID] = mapped_column(UUID, ForeignKey("staff.id", ondelete="CASCADE"), nullable=False)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    all_day: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_by: Mapped[uuid_pkg.UUID] = mapped_column(UUID, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+    __table_args__ = (
+        # Availability reads a business's time off for a window; the staff app reads one person's.
+        Index("ix_staff_time_off_business_starts", "business_id", "starts_at"),
+        Index("ix_staff_time_off_staff_starts", "staff_id", "starts_at"),
+    )

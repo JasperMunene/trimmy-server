@@ -46,6 +46,12 @@ async def list_business_payouts(
     return await PayoutsService(db).list_for_business(current_user, business_id, status_filter, staff_id)
 
 
+@router.get("/payouts/{payout_id}", response_model=PayoutResponse)
+async def get_payout(payout_id: str, current_user: User = Depends(get_current_verified_user), db: AsyncSession = Depends(get_db)):
+    """One payout request (e.g. opened from a notification): the owner, or the staff member who asked."""
+    return await PayoutsService(db).get(current_user, payout_id)
+
+
 @router.post("/payouts/{payout_id}/respond", response_model=PayoutResponse)
 async def respond_to_payout(
     payout_id: str,
