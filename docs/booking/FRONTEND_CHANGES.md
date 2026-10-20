@@ -4,6 +4,14 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-10-20 · Account recovery by phone
+
+**`auth.json#forgot-password`, `#verify-reset-otp`, `#reset-password`:** each now takes `phone` instead of `email`. An SMS code only goes to a phone proven with a code (`phone_verified_at`), so a number typed into someone's profile can't be used to take over their account. The answer is the same whether or not an account exists, and the per-number send limits match email's.
+
+**App:** done. Forgot password has an Email / Phone switch, and the code and new-password steps carry the choice through.
+
+---
+
 ## 2026-10-20 · Business bookings reach the customer's app; tips at checkout; earnings by payment date
 
 **Customer matching (walk-in, scheduled):**
