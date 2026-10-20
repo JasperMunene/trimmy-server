@@ -27,6 +27,8 @@ x-app-env: &app-env
   MPESA_CALLBACK_URL: ${MPESA_CALLBACK_URL:-}
   MPESA_CALLBACK_SECRET: ${MPESA_CALLBACK_SECRET:-}
   EXPO_ACCESS_TOKEN: ${EXPO_ACCESS_TOKEN:-}
+  # Push stays off until EAS/APNs/FCM are set up; tokens are collected meanwhile.
+  NOTIFY_PUSH_ENABLED: ${NOTIFY_PUSH_ENABLED:-false}
 
 services:
   redis:

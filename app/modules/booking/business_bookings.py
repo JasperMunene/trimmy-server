@@ -256,7 +256,7 @@ class BusinessBookingsService:
         if booking.status == BookingStatus.CONFIRMED and booking.customer_phone:
             await booking_tasks.notify_confirmed(booking.id)  # on-behalf bookings; walk-ins are already here
         if booking.staff_id:
-            await booking_tasks.push_update(booking.id, "assigned")
+            await booking_tasks.push_update(booking.id, "assigned", actor_id=user.id)
         return await self.bookings.get_response(booking.id)
 
     # ─── status changes ──────────────────────────────────────
@@ -292,9 +292,15 @@ class BusinessBookingsService:
         elif data.status == BookingStatus.NO_SHOW:
             await self._apply_no_show_fee(booking)
         await self.db.commit()
+        from app.modules.booking.tasks import push_update
         if data.status == BookingStatus.CANCELLED:
-            from app.modules.booking.tasks import push_update
             await push_update(booking.id, "cancelled_by_business")
+            await push_update(booking.id, "cancelled_for_staff", actor_id=user.id)
+        elif data.status == BookingStatus.NO_SHOW:
+            await push_update(booking.id, "no_show")
+        elif data.status == BookingStatus.COMPLETED and booking.payment_status == "paid":
+            # Unpaid: the receipt goes out when it's charged (payments/service.py mark_charged).
+            await push_update(booking.id, "completed")
         return await self.bookings.get_response(booking.id)
 
     async def _apply_no_show_fee(self, booking: Booking) -> None:
@@ -341,4 +347,6 @@ class BusinessBookingsService:
             reason=f"refunded {booking.refund_reference or ''}".strip()[:100],
         ))
         await self.db.commit()
+        from app.modules.booking.tasks import push_update
+        await push_update(booking.id, "refunded")
         return await self.bookings.get_response(booking.id)

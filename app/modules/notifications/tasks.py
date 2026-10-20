@@ -5,7 +5,11 @@ from typing import Optional
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.workers.registry import PermanentError, task
+from app.workers.registry import PermanentError, periodic, task
+
+# Registers notifications.dispatch / notifications.send_email with the worker (tasks are
+# discovered from tasks.py modules).
+from app.modules.notifications import dispatch as _dispatch  # noqa: E402,F401
 
 logger = logging.getLogger(__name__)
 
@@ -29,14 +33,35 @@ async def send_push(user_id: str, title: str, body: str, data: dict, db: AsyncSe
 
 
 async def notify(user_id: Optional[uuid_pkg.UUID], title: str, body: str, **data) -> None:
-    """Queue a push to a user (no-op for None). Never fails the caller over a notification."""
-    if user_id is None:
-        return
-    try:
-        await send_push.enqueue(user_id=str(user_id), title=title, body=body,
-                                data={k: str(v) for k, v in data.items() if v is not None})
-    except Exception as e:
-        logger.error(f"Could not queue push to {user_id}: {e}")
+    """Notify one user (no-op for None): inbox, live stream and, when switched on, push.
+    `type` goes in data, e.g. notify(uid, "Payout approved", "...", type="payout_responded", payoutId=...).
+    Never fails the caller."""
+    from app.modules.notifications.dispatch import notify_users
+
+    type_ = data.pop("type", "general")
+    await notify_users([user_id], title, body, type=str(type_), data=data)
+
+
+@periodic("notifications.prune", every=3600)
+async def prune_notifications(db: AsyncSession) -> None:
+    """Delete inbox rows older than NOTIFICATION_RETENTION_DAYS, a batch at a time so a large
+    backlog never holds a long lock."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.core.config import settings
+    from app.modules.notifications.models import Notification
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=settings.NOTIFICATION_RETENTION_DAYS)
+    removed = 0
+    for _ in range(20):
+        ids = (await db.execute(select(Notification.id).where(Notification.created_at < cutoff).limit(1000))).scalars().all()
+        if not ids:
+            break
+        await db.execute(delete(Notification).where(Notification.id.in_(ids)))
+        await db.commit()
+        removed += len(ids)
+    if removed:
+        logger.info(f"Pruned {removed} old notification(s)")
 
 
 @task("notifications.send_sms", queue="sms", max_retries=5)

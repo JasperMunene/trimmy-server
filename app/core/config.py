@@ -49,8 +49,9 @@ class Settings(BaseSettings):
     MPESA_CONSUMER_SECRET: str = ""
     MPESA_SHORTCODE: str = ""
     MPESA_PASSKEY: str = ""
-    # Public https URL of POST /payments/mpesa/callback; the secret is appended as
+    # Public https URL of POST /payments/stk/callback; the secret is appended as
     # the last path segment so only Daraja (who got the full URL) can call it.
+    # Daraja rejects URLs containing words like "mpesa"/"safaricom" (Invalid CallBackURL).
     MPESA_CALLBACK_URL: str = ""
     MPESA_CALLBACK_SECRET: str = ""
 
@@ -65,6 +66,32 @@ class Settings(BaseSettings):
     # Expo push notifications (BK-41). Empty URL = don't send (log only), as in tests.
     EXPO_PUSH_URL: str = "https://exp.host/--/api/v2/push/send"
     EXPO_ACCESS_TOKEN: str = ""  # only if "enhanced push security" is on in the Expo project
+
+    # Notification channels (app/modules/notifications/dispatch.py). Every notification lands in
+    # the in-app inbox and the live stream; these switch the outside channels on and off.
+    # Push stays off until the app's EAS project, APNs key and FCM credentials are set up;
+    # tokens are still collected meanwhile, so turning it on reaches everyone who signed in.
+    NOTIFY_PUSH_ENABLED: bool = False
+    NOTIFY_SMS_ENABLED: bool = True
+    NOTIFY_EMAIL_ENABLED: bool = True
+    # POST /me/notifications/test: sends yourself a test notification (for checking the stream).
+    NOTIFY_TEST_ENDPOINT_ENABLED: bool = True
+    # Inbox rows older than this are deleted by notifications.prune.
+    NOTIFICATION_RETENTION_DAYS: int = 90
+    # Where invitation SMS/emails send people who don't have the app yet (store page or landing
+    # page). Empty = the message just says to get the Trimmy app.
+    APP_DOWNLOAD_URL: str = ""
+
+    # Live stream (GET /me/events, server-sent events).
+    #   redis: events published by any process (API or worker) reach every API process
+    #   local: in-process only (tests, or a single process without Redis)
+    REALTIME_BACKEND: str = "redis"
+    # A comment line this often keeps proxies and mobile NATs from dropping an idle stream.
+    SSE_HEARTBEAT_SECONDS: int = 20
+    # Streams are closed after this long and the app reconnects: it picks up a fresh access
+    # token and spreads clients across API processes after a deploy.
+    SSE_MAX_CONNECTION_SECONDS: int = 25 * 60
+    SSE_MAX_STREAMS_PER_USER: int = 5
 
     GOOGLE_AUTH_CLIENT_ID: str = ""
     GOOGLE_AUTH_CLIENT_SECRET: str = ""

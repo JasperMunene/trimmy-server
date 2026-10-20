@@ -93,8 +93,12 @@ async def expire_holds(
     if db.bind.dialect.name == "postgresql":
         query = query.with_for_update(skip_locked=True)
     expired = (await db.execute(query)).scalars().all()
+    if expired:
+        from app.modules.booking.tasks import push_update
+        from app.modules.notifications.after_commit import notify_after_commit
     for booking in expired:
         transition(booking, BookingStatus.CANCELLED, reason="payment_expired")
+        notify_after_commit(db, lambda bid=booking.id: push_update(bid, "hold_expired"))
     return len(expired)
 
 
@@ -262,9 +266,11 @@ class BookingsService:
 
         from app.modules.booking import tasks as booking_tasks
         if booking.status == BookingStatus.CONFIRMED:
+            # A deposit booking waits for its payment (payments/results.py) before anyone is told.
             await booking_tasks.notify_confirmed(booking.id)
-        if booking.staff_id:
-            await booking_tasks.push_update(booking.id, "assigned")
+            await booking_tasks.push_update(booking.id, "created")
+            if booking.staff_id:
+                await booking_tasks.push_update(booking.id, "assigned")
         return await self.get_response(booking.id)
 
     # ─── cancelling (BK-60) ──────────────────────────────────
@@ -336,6 +342,8 @@ class BookingsService:
         if reason:
             booking.events[-1].reason = f"customer: {reason}"[:100]
         await self.db.commit()
+        from app.modules.booking import tasks as booking_tasks
+        await booking_tasks.push_update(booking.id, "cancelled_by_customer", actor_id=user.id)
         return await self.get_response(booking.id)
 
     # ─── assigning staff (BK-26) ─────────────────────────────
@@ -387,7 +395,7 @@ class BookingsService:
             await self.db.rollback()
             raise _error(409, "staff_unavailable", "That staff member is already booked at this time")
         from app.modules.booking import tasks as booking_tasks
-        await booking_tasks.push_update(booking.id, "assigned")
+        await booking_tasks.push_update(booking.id, "assigned", actor_id=user.id)
         return await self.get_response(booking.id)
 
     async def _can_manage(self, user: User, business_id: uuid_pkg.UUID) -> bool:

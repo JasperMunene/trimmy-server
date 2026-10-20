@@ -4,6 +4,51 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-10-20 · Notification settings, booking emails, more booking notifications
+
+**Changed response → `auth.json#get-notification-preferences`:** adds `categories` (only those that apply: `bookings`, `reminders`, `business`, `payouts`, `team`, each `{push, sms, email}`) and `availableChannels`. `reminders` keeps its old fields plus `email`. PATCH takes `categories.<category>.<channel>` and `reminders.dayBefore / twoHoursBefore`. In-app is always on.
+
+**Booking emails** (customer, per `bookings` / `reminders` email setting; guests without an account get them at the booking's email): confirmed, cancelled by the business, moved by the business, refund due, refunded, no-show, completed (receipt), and the 24h reminder (email off by default).
+
+**New notification types:**
+- To the customer (`/booking/{bookingId}`): `booking_rescheduled_by_business` (replaces the plain "confirmed" on a business reschedule), `booking_payment_failed`, `booking_hold_expired`, `booking_refund_due`, `booking_refunded`, `booking_no_show`, `booking_completed`.
+- To the staff member: `booking_cancelled_for_staff` (`/appointment/{bookingId}`).
+- To owner and front desk: `booking_refund_owed` (`/manage-business/refunds`).
+
+**Behaviour changes:**
+- Customers without a phone number now get reminders: in the app, and by push or email as their settings allow.
+- A business cancellation now also texts the customer (BK-60's open item).
+- Staff are told about a deposit booking only once it's paid, not while it's still on hold.
+- `booking_completed` goes out once per booking, when the visit is paid.
+
+**Server:** migration `026`; `booking/messages.py` holds the wording of every booking notification; `notifications/after_commit.py` sends only if the change commits.
+
+---
+
+## 2026-10-20 · In-app notifications: inbox, live stream, new events
+
+**Why:** every notification now lands in an in-app inbox and is streamed to the open app; push, SMS and email are extra channels with switches. Push is **off** (`NOTIFY_PUSH_ENABLED=false`) until the EAS project, APNs key and FCM credentials exist; tokens are still collected.
+
+**New endpoints → `auth.json`:** `GET /me/notifications` (cursor pages, `unread=true`, `unreadCount`), `GET /me/notifications/unread-count`, `POST /me/notifications/{id}/read`, `POST /me/notifications/read-all`, `POST /me/notifications/test`, and `GET /me/events` (server-sent events: `ready`, `notification`, `resync`, `reconnect`, `: ping` every 20s; send `Last-Event-ID` to replay what was missed).
+
+**New notification types** (inbox, stream, and push once on):
+
+| type | to | data | opens |
+| --- | --- | --- | --- |
+| `booking_created` | owner, front desk | bookingId, businessId | `/appointment/{bookingId}` |
+| `booking_cancelled_by_customer` | owner, front desk, assigned staff | bookingId, businessId | `/appointment/{bookingId}` |
+| `booking_rescheduled_by_customer` | owner, front desk, assigned staff | bookingId, businessId | `/appointment/{bookingId}` |
+| `payout_requested` | owner | payoutId, businessId | `/payouts` |
+| `team_invitation` | invitee with an account | invitationId, businessId | `/profile` |
+
+Invitees without an account get an SMS and/or email instead. Every existing push type (`booking_confirmed`, reminders, `booking_assigned`, `payout_responded`, `wallet_adjusted`, `day_summary_submitted`) is now also in the inbox. Whoever caused an event isn't notified about it.
+
+**Server:** migration `025` (`notifications`, `notification_deliveries`), `app/modules/notifications/{dispatch,realtime,inbox}.py`. One Redis pattern subscription per API process fans events out in memory, so open streams hold no database or Redis connections. `notifications.prune` deletes rows older than 90 days. Settings: `NOTIFY_PUSH_ENABLED`, `NOTIFY_SMS_ENABLED`, `NOTIFY_EMAIL_ENABLED`, `REALTIME_BACKEND`, `SSE_*`, `APP_DOWNLOAD_URL`.
+
+**Deploy checklist:** run migration 025; whatever proxies api.trimmy.com must not buffer `/api/v1/me/events` and must allow idle reads of at least 60s. The server already sends `X-Accel-Buffering: no` (nginx honours it) and a heartbeat every 20s.
+
+---
+
 ## 2026-10-03 · Front desk hidden from customers
 
 **Changed response → `discovery.json#get-business-profile`**: `staff[]` no longer includes front desk members. Only people a customer could book are listed: staff and an owner who takes clients.

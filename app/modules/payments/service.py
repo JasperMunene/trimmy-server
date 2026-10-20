@@ -207,3 +207,7 @@ async def mark_charged(db: AsyncSession, booking: Booking, *, reason: str, actor
         booking.staff_commission = math.floor(booking.total_amount * staff.commission_percent / 100)
     if booking.status == BookingStatus.IN_PROGRESS:
         transition(booking, BookingStatus.COMPLETED, actor_id=actor_id, reason=f"charged: {reason}"[:100])
+    # The receipt (and review prompt). Once per booking, however it was completed.
+    from app.modules.booking.tasks import push_update
+    from app.modules.notifications.after_commit import notify_after_commit
+    notify_after_commit(db, lambda bid=booking.id: push_update(bid, "completed"))

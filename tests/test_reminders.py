@@ -171,8 +171,11 @@ async def test_failed_send_is_released_for_a_retry(salon, customer, db_session, 
 async def test_preferences_default_on_and_patch_only_changes_what_is_sent(client, customer):
     _, h = customer
     url = "/api/v1/me/notification-preferences"
-    everything = {"dayBefore": True, "twoHoursBefore": True, "sms": True, "push": True}
-    assert (await client.get(url, headers=h)).json() == {"reminders": everything}
+    everything = {"dayBefore": True, "twoHoursBefore": True, "sms": True, "push": True, "email": False}
+    first = (await client.get(url, headers=h)).json()
+    assert first["reminders"] == everything
+    # A customer only: no business or payout categories.
+    assert set(first["categories"]) == {"bookings", "reminders", "team"}
     resp = await client.patch(url, json={"reminders": {"dayBefore": False}}, headers=h)
     assert resp.status_code == 200, resp.text
     assert resp.json()["reminders"] == {**everything, "dayBefore": False}
@@ -215,4 +218,5 @@ async def test_channels(client, salon, customer, db_session, outbox, pushed):
     await client.patch(url, json={"reminders": {"sms": True, "push": False}}, headers=h)
     await upcoming(db_session, salon, user.id, 90 * timedelta(minutes=1))
     await scan()
-    assert len(outbox) == 1 and pushed == ["reminder_24h"]
+    # Always in the inbox; whether it's also pushed is up to deliver() and their push setting.
+    assert len(outbox) == 1 and pushed == ["reminder_24h", "reminder_2h"]

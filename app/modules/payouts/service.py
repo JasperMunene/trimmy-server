@@ -98,6 +98,14 @@ class PayoutsService:
         self.db.add(payout)
         await self.db.commit()
         await self.db.refresh(payout)
+
+        business = await self.db.get(Business, business_id)
+        if business is not None and business.owner_id != user.id:
+            from app.modules.notifications.tasks import notify
+            await notify(
+                business.owner_id, "Payout request", f"{me.name} requested KES {amount:,} from their wallet.",
+                type="payout_requested", payoutId=payout.id, businessId=business_id,
+            )
         return _response(payout)
 
     async def list_for_business(

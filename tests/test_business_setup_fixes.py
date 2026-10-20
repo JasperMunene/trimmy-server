@@ -574,6 +574,8 @@ def test_business_routes_document_response_models():
             continue
         for method, op in ops.items():
             for status, resp in op["responses"].items():
+                if "text/event-stream" in resp.get("content", {}):
+                    continue  # a live stream (GET /me/events), not a JSON body
                 if status.startswith("2") and status != "204":
                     schema = resp.get("content", {}).get("application/json", {}).get("schema", {})
                     if "$ref" not in schema:

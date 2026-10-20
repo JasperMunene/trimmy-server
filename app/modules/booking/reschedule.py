@@ -102,6 +102,7 @@ class RescheduleService:
             raise _error(409, "slot_unavailable", "The selected time is no longer available")
 
         old_label = f"{booking.local_date.isoformat()} {booking.local_time}"
+        old_when = f"{booking.local_date.strftime('%a %-d %b')}, {booking.local_time}"  # as messages.py writes times
         booking.starts_at = new_start.astimezone(timezone.utc)
         booking.ends_at = new_end.astimezone(timezone.utc)
         booking.local_date, booking.local_time = data.date, data.time
@@ -119,8 +120,14 @@ class RescheduleService:
             raise _error(409, "slot_unavailable", "The selected time is no longer available")
 
         from app.modules.booking import tasks as booking_tasks
-        if booking.status == BookingStatus.CONFIRMED:
-            await booking_tasks.notify_confirmed(booking.id)
+        if as_business:
+            # Tell the customer it moved (SMS / email / in-app, as their settings say) — not a
+            # plain "confirmed", which wouldn't say the time changed.
+            await booking_tasks.push_update(booking.id, "rescheduled_by_business", old_when=old_when)
+        else:
+            if booking.status == BookingStatus.CONFIRMED:
+                await booking_tasks.notify_confirmed(booking.id)  # their own receipt for the new time
+            await booking_tasks.push_update(booking.id, "rescheduled_by_customer", actor_id=user.id, old_when=old_when)
         if booking.staff_id:
-            await booking_tasks.push_update(booking.id, "assigned")  # the (possibly new) staff member
+            await booking_tasks.push_update(booking.id, "assigned", actor_id=user.id)  # the (possibly new) staff member
         return await BookingsService(self.db, self.now).get_response(booking.id)

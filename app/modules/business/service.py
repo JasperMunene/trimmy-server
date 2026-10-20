@@ -884,8 +884,8 @@ class BusinessService:
                 raise _validation_error("paybillNumber and paybillAccountNumber are required for type mpesa_paybill")
             if not re.fullmatch(r"\d{5,6}", paybill):
                 raise _validation_error("paybillNumber must be 5-6 digits")
-            if len(account) > 50:
-                raise _validation_error("paybillAccountNumber must be at most 50 characters")
+            if not re.fullmatch(r"[A-Za-z0-9\-_/. ]{1,20}", account):
+                raise _validation_error("paybillAccountNumber must be 1-20 letters, digits, spaces or -_/.")
             return {"paybill_number": paybill, "paybill_account_number": account}
 
         name, shortcode, account = (data.bank_name or "").strip(), digits(data.bank_shortcode), digits(data.bank_account_number)
@@ -893,8 +893,8 @@ class BusinessService:
             raise _validation_error("bankName, bankShortcode, and bankAccountNumber are required for type bank_account")
         if not re.fullmatch(r"\d{5,6}", shortcode):
             raise _validation_error("bankShortcode must be 5-6 digits")
-        if not re.fullmatch(r"[A-Za-z0-9]{5,34}", account):
-            raise _validation_error("bankAccountNumber must be 5-34 letters or digits")
+        if not re.fullmatch(r"[A-Za-z0-9]{5,20}", account):
+            raise _validation_error("bankAccountNumber must be 5-20 letters or digits")
         return {"bank_name": name, "bank_shortcode": shortcode, "bank_account_number": account}
 
     # ─── set-team-mode ───────────────────────────────────────
@@ -972,7 +972,39 @@ class BusinessService:
         self.db.add(invitation)
         await self.db.commit()
         await self.db.refresh(invitation)
+        await self._tell_invitee(business, invitation)
         return invitation
+
+    async def _tell_invitee(self, business: Business, invitation: TeamInvitation) -> None:
+        """Someone with an account sees it in the app (GET /me/invitations matches them by email or
+        phone); anyone else gets an SMS and/or email telling them to sign up with that contact."""
+        from app.modules.notifications.dispatch import email_html, notify_contact
+        from app.modules.notifications.tasks import notify
+
+        role = "front desk" if invitation.role == "front_desk" else "staff"
+        matches = []
+        if invitation.email:
+            matches.append(func.lower(User.email) == invitation.email.lower())
+        if invitation.phone:
+            matches.append(User.phone == invitation.phone)
+        existing = (await self.db.execute(select(User.id).where(or_(*matches)).limit(1))).scalar_one_or_none()
+        if existing is not None:
+            await notify(existing, "Team invitation", f"{business.name} invited you to join their team as {role}.",
+                         type="team_invitation", invitationId=invitation.id, businessId=business.id)
+            return
+        link = settings.APP_DOWNLOAD_URL
+        get_app = f"Get the Trimmy app{': ' + link if link else ''} and sign up with this"
+        await notify_contact(
+            phone=invitation.phone, email=invitation.email,
+            sms=f"Trimmy: {business.name} invited you to join their team as {role}. {get_app} number to accept.",
+            subject=f"{business.name} invited you to Trimmy",
+            html_body=email_html(
+                f"Join {business.name} on Trimmy",
+                [f"{business.name} invited you to join their team as {role}.",
+                 "Sign up with this email address to see and accept the invitation."],
+                link or None, "Get the app",
+            ),
+        )
 
     # ─── booking settings ────────────────────────────────────
 
