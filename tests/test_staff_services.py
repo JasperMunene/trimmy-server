@@ -100,7 +100,14 @@ async def test_rejects_invalid(client, auth_headers, db_session, body):
 @pytest.mark.asyncio
 async def test_other_business_staff_is_404(client, auth_headers, db_session):
     biz_id, _, _, _ = await _setup(client, auth_headers, db_session)
-    stranger = Staff(id=uuid.uuid4(), business_id=uuid.uuid4(), name="X", role="staff")
+    other = await client.post(
+        "/api/v1/businesses",
+        json={"name": "Elsewhere", "categories": ["barbershop"], "phone": "+254700999888",
+              "location": {"address": "Westlands", "lat": -1.26, "lng": 36.8}},
+        headers=auth_headers,
+    )
+    assert other.status_code == 201, other.text
+    stranger = Staff(id=uuid.uuid4(), business_id=uuid.UUID(other.json()["businessId"]), name="X", role="staff")
     db_session.add(stranger)
     await db_session.commit()
     resp = await client.get(_url(biz_id, stranger.id), headers=auth_headers)

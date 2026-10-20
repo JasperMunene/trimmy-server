@@ -29,7 +29,7 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | BK-36 | Payment destinations fit Daraja limits; merge bank lists | M3 | S | — | | todo |
 | BK-40 | Booking confirmation SMS | M4 | S | BK-22 | eslieh | done |
 | BK-41 | Push notification tokens (Expo) | M4 | M | — | eslieh | done |
-| BK-50 | Concurrency test for double-booking | M5 | S | BK-22, BK-05 | | todo |
+| BK-50 | Concurrency test for double-booking | M5 | S | BK-22, BK-05 | eslieh | in review |
 | BK-51 | M-Pesa production go-live | M5 | S (weeks of lead time) | BK-01 | | todo |
 | BK-52 | Contract hand-off to the app team | M5 | S | BK-22, BK-31 | | todo |
 | BK-60 | Cancel within policy | Next | M | BK-22 | eslieh | done |
@@ -85,7 +85,8 @@ The exclusion constraint (D9) can't be tested on SQLite.
 
 Done so far: `test.yml` runs a `[sqlite, postgres]` matrix; `TEST_DATABASE_URL` switches the suite to Postgres (creating `btree_gist` first); `@pytest.mark.postgres_only` skips on SQLite; a guard refuses any test database host other than localhost/127.0.0.1/postgres, because every test drops all tables.
 
-- [ ] CI runs green on Postgres. Not verified yet: no local Postgres was used, and `test.yml` only runs on pushes and PRs to `sandbox`/`main`, so the first such PR is the check. Expect possible fixes for SQLite-vs-Postgres differences (timezones, JSON, ordering).
+- [x] The full suite passes on Postgres 16 (run locally in Docker, 2026-10-20): 649 passed; the 2 failures were tests inserting rows for businesses that don't exist (SQLite doesn't enforce foreign keys), now fixed.
+- [ ] CI runs green on Postgres. Not verified yet in CI itself: no local Postgres was used, and `test.yml` only runs on pushes and PRs to `sandbox`/`main`, so the first such PR is the check. Expect possible fixes for SQLite-vs-Postgres differences (timezones, JSON, ordering).
 
 ## M1: Availability
 
@@ -112,7 +113,7 @@ Done so far: `test.yml` runs a `[sqlite, postgres]` matrix; `TEST_DATABASE_URL` 
 - `transition(booking, to, actor, reason)`, which enforces the diagram in PLAN.md section 4.2 and writes a `booking_events` row.
 
 - [x] An illegal transition raises a clear error; tests cover every allowed and disallowed pair (`tests/test_booking_states.py`).
-- [ ] Overlapping active bookings for one staff member are rejected by the database. The constraint is in migration `009` and the model (Postgres only); its test is written but skips until BK-05 runs the suite on Postgres.
+- [x] Overlapping active bookings for one staff member are rejected by the database (migration `009`; its Postgres-only test passes, 2026-10-20).
 - Also added: a short `reference` per booking (`BK` + 6 characters), usable as the M-Pesa till `AccountReference` and on receipts.
 
 ### BK-21 · Price and deposit calculator
@@ -126,7 +127,7 @@ A pure function: `(services with quantities, policies) -> { total, deposit | Non
 - No deposit gives `confirmed`. A deposit gives `pending_payment` with `expires_at = now + 10 min` (D6).
 - Snapshot the customer's name and phone from their account.
 
-- [ ] Two parallel requests for the same slot give one 201 and one 409. Sequential double-booking is tested; the parallel case needs Postgres (BK-50).
+- [x] Parallel requests for the same slot give one 201 and the rest 409 (`tests/test_booking_concurrency.py`, BK-50).
 - [x] A changed `expectedTotal` returns 409 `price_changed` with the current total.
 - [x] The booking can't be for your own business's staff when you're the owner (400 `own_business`).
 - Also: expired holds in that business are released on the spot before the slot check (so they can't trip the constraint), and times off the slot grid or outside hours return 409 (`tests/test_create_booking.py`).
@@ -239,8 +240,10 @@ Daraja documents a 12-character cap on `AccountReference`; we allow 20 so longer
 ## M5: Go-live
 
 ### BK-50 · Concurrency test for double-booking
-- [ ] A Postgres test fires 20 concurrent `POST /bookings` for the same staff and slot: exactly one succeeds and the rest get 409.
-- [ ] The same test with "Any available" and 3 free staff: exactly 3 unassigned bookings succeed, and the 4th gets 409.
+- [x] A Postgres test fires 20 concurrent `POST /bookings` for the same staff and slot: exactly one succeeds and the rest get 409.
+- [x] The same test with "Any available" and 3 free staff: exactly 3 succeed and the rest get 409 (6 requests).
+
+Both in `tests/test_booking_concurrency.py`; each request gets its own session and connection, as real requests do. Passing on Postgres 16 (2026-10-20).
 
 ### BK-51 · M-Pesa production go-live
 Start on day one; Safaricom's approval takes weeks.

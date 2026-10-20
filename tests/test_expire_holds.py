@@ -10,12 +10,13 @@ import app.workers.registry as registry
 from app.modules.booking.models import Booking
 from app.modules.booking.states import record_created
 from app.workers.registry import PERIODIC, TASKS, discover_tasks
+from tests.test_create_booking import salon  # noqa: F401  (fixture)
 
 
-def pending(expires_in_minutes, **fields):
+def pending(expires_in_minutes, business_id=None, **fields):
     start = datetime.now(timezone.utc) + timedelta(days=2)
     b = Booking(
-        business_id=uuid.uuid4(), starts_at=start, ends_at=start + timedelta(minutes=45),
+        business_id=business_id or uuid.uuid4(), starts_at=start, ends_at=start + timedelta(minutes=45),
         local_date=start.date(), local_time="10:00", duration_minutes=45, total_amount=800,
         customer_name="Amina", deposit_amount=200,
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=expires_in_minutes), **fields,
@@ -31,10 +32,12 @@ def test_registered_every_minute():
 
 
 @pytest.mark.asyncio
-async def test_sweep_releases_only_expired_holds(db_session, monkeypatch):
+async def test_sweep_releases_only_expired_holds(db_session, monkeypatch, salon):
     discover_tasks()
-    expired, live = pending(-1), pending(+5)
-    confirmed = pending(-1)
+    # A real business: Postgres enforces the foreign key (SQLite doesn't).
+    biz = uuid.UUID(salon["id"])
+    expired, live = pending(-1, biz), pending(+5, biz)
+    confirmed = pending(-1, biz)
     confirmed.status = "confirmed"  # holds only apply to pending_payment
     db_session.add_all([expired, live, confirmed])
     await db_session.commit()
