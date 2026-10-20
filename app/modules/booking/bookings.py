@@ -32,6 +32,7 @@ from app.modules.booking.schemas import (
     NoShowFeeResponse,
     RefundResponse,
     DepositPaymentResponse,
+    PaymentDestinationResponse,
     BookingResponse,
     CreateBookingRequest,
     ListBookingsResponse,
@@ -133,6 +134,36 @@ def deposit_paid(booking: Booking) -> int:
     if booking.payment_status != PaymentStatus.DEPOSIT_PAID:
         return 0
     return booking.deposit_amount or 0
+
+
+def _last4(value: str) -> str:
+    value = (value or "").strip()
+    return f"…{value[-4:]}" if len(value) > 4 else value
+
+
+def _destination_label(payment: Payment) -> str:
+    """Where M-Pesa sent it, from what was recorded on the payment (not today's settings)."""
+    if payment.destination_type == "mpesa_till":
+        return f"Till {payment.party_b}"
+    if payment.destination_type == "mpesa_paybill":
+        return f"Paybill {payment.party_b}, account {_last4(payment.account_reference)}"
+    from app.modules.business.payment_options import BANKS
+
+    bank = next((b["name"] for b in BANKS if b["shortcode"] == payment.party_b), f"Bank paybill {payment.party_b}")
+    return f"{bank}, account {_last4(payment.account_reference)}"
+
+
+def _payment_response(payment: Optional[Payment]) -> Optional[DepositPaymentResponse]:
+    if payment is None:
+        return None
+    succeeded = payment.status == "succeeded"
+    return DepositPaymentResponse(
+        paymentId=payment.id, status=payment.status, failureReason=payment.failure_reason,
+        amount=Money(amount=payment.amount, currency=payment.currency or "KES"),
+        receipt=payment.mpesa_receipt if succeeded else None,
+        paidAt=_aware(payment.settled_at) if succeeded and payment.settled_at else None,
+        destination=PaymentDestinationResponse(type=payment.destination_type, label=_destination_label(payment)),
+    )
 
 
 def _settling(deposit: Optional[Payment], charge: Optional[Payment]) -> tuple[Optional[str], Optional[str]]:
@@ -561,9 +592,10 @@ class BookingsService:
             paymentStatus=booking.payment_status,
             expiresAt=_aware(booking.expires_at) if booking.expires_at else None,
             cancelReason=booking.cancel_reason,
-            depositPayment=(
-                DepositPaymentResponse(paymentId=deposit.id, status=deposit.status, failureReason=deposit.failure_reason)
-                if deposit else None
+            depositPayment=_payment_response(deposit),
+            depositPaid=(
+                Money(amount=deposit.amount, currency=booking.currency)
+                if deposit is not None and deposit.status == "succeeded" else None
             ),
             paymentReference=_settling(deposit, charge)[1],
             cancellationFee=Money(amount=booking.cancellation_fee, currency=booking.currency) if booking.cancellation_fee else None,
@@ -590,10 +622,7 @@ class BookingsService:
                 amount=0 if booking.payment_status == PaymentStatus.PAID else max(booking.total_amount - deposit_paid(booking), 0),
                 currency=booking.currency,
             ),
-            chargePayment=(
-                DepositPaymentResponse(paymentId=charge.id, status=charge.status, failureReason=charge.failure_reason)
-                if charge else None
-            ),
+            chargePayment=_payment_response(charge),
             notes=booking.notes,
             createdAt=_aware(booking.created_at),
         )

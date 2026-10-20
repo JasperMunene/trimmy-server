@@ -24,21 +24,21 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | BK-31 | Payments table and `POST /bookings/{id}/payments` | M3 | M | BK-22, BK-30 | eslieh | done |
 | BK-32 | M-Pesa callback endpoint | M3 | M | BK-31 | eslieh | done |
 | BK-33 | Reconcile stuck payments | M3 | S | BK-25, BK-31 | eslieh | done |
-| BK-34 | Deposit and receipt on the booking, per-business deposit totals | M3 | S | BK-32 | | todo |
-| BK-35 | Prove payment routing in production | M3 | S | BK-30 | eslieh | in progress |
+| BK-34 | Deposit and receipt on the booking, per-business deposit totals | M3 | S | BK-32 | eslieh | done |
+| BK-35 | Prove payment routing in production | M3 | S | BK-30 | eslieh | done |
 | BK-36 | Payment destinations fit Daraja limits; merge bank lists | M3 | S | — | | todo |
 | BK-40 | Booking confirmation SMS | M4 | S | BK-22 | eslieh | done |
 | BK-41 | Push notification tokens (Expo) | M4 | M | — | eslieh | done |
 | BK-50 | Concurrency test for double-booking | M5 | S | BK-22, BK-05 | eslieh | in review |
-| BK-51 | M-Pesa production go-live | M5 | S (weeks of lead time) | BK-01 | | todo |
-| BK-52 | Contract hand-off to the app team | M5 | S | BK-22, BK-31 | | todo |
+| BK-51 | M-Pesa production go-live | M5 | S (weeks of lead time) | BK-01 | eslieh | done |
+| BK-52 | Contract hand-off to the app team | M5 | S | BK-22, BK-31 | eslieh | in progress |
 | BK-60 | Cancel within policy | Next | M | BK-22 | eslieh | done |
 | BK-61 | Reschedule | Next | M | BK-22, BK-11 | eslieh | done |
 | BK-62 | Reminders 24h and 2h before | Next | M | BK-25, BK-40 | eslieh | done |
 | BK-63 | Owner and front-desk bookings (list, walk-in, on-behalf, status) | Next | L | BK-22 | eslieh | done |
 | BK-64 | No-show marking and fee | Next | S | BK-63 | eslieh | done |
 
-**Start here:** BK-05, BK-21, BK-25, BK-30 and BK-36 have no dependencies and can be picked up now. BK-51 should start on day one because of Safaricom's lead time, and BK-35 follows as soon as it lands: it's the biggest open risk.
+**What's left (2026-10-20):** BK-05 (CI's first green Postgres run, on the next PR to `sandbox`/`main`), BK-50 (merge), BK-01 (sign off D9 now that the Postgres tests pass), BK-36 (check saved destinations; confirm a 13-20 character reference in production), and BK-52's walkthrough with the app team.
 
 ---
 
@@ -206,10 +206,12 @@ A pure function: `(services with quantities, policies) -> { total, deposit | Non
 ### BK-34 · Deposit and receipt on the booking, per-business deposit totals
 With payment routing (D1) the money is already in the business's account, so there's nothing to settle. Record what was paid, and where it went, for the owner's view.
 
-- [ ] The booking shows `depositPaid`, the M-Pesa receipt and the destination it was routed to.
-- [ ] Owner earnings (a later phase) can sum deposits per business and date range from `payments`.
+- [x] The booking shows `depositPaid`, and `depositPayment` / `chargePayment` carry the amount, M-Pesa `receipt`, `paidAt` and `destination` `{type, label}` (account numbers shortened to the last 4), from what was recorded on the payment (2026-10-20, `tests/test_payments.py`). Shown on the customer's booking and the owner's appointment.
+- [x] Owner earnings sum deposits per business and date range: `money.depositsCollected` in get-earnings-summary.
 
 ### BK-35 · Prove payment routing in production
+
+Done (confirmed by the team, 2026-10-20), with go-live (BK-51).
 The sandbox doesn't validate `PartyB`, so routing to a till or paybill Trimmy doesn't own is unproven. As soon as production credentials exist (BK-51), push KES 1 to one real third-party till, one paybill and one bank.
 
 - [x] Paybill: a production STK push routed to a third-party paybill succeeded (2026-09-26, `scripts/mpesa_stk.py`).
@@ -248,12 +250,14 @@ Both in `tests/test_booking_concurrency.py`; each request gets its own session a
 ### BK-51 · M-Pesa production go-live
 Start on day one; Safaricom's approval takes weeks.
 
+Done (confirmed by the team, 2026-10-20): production M-Pesa is live. The checklist below wasn't itemised when it was closed.
+
 - [ ] Go-live application submitted for the paybill decided in D1.
 - [ ] Production passkey and credentials stored as GitHub environment secrets.
 - [ ] Production callback URL (https) registered, and Safaricom's IP ranges allowed at the proxy.
 
 ### BK-52 · Contract hand-off to the app team
-- [ ] `mobile/reference/api/booking.json` updated with PLAN.md section 5, marked `live` per endpoint as they ship.
+- [x] `mobile/reference/api/booking.json` updated with PLAN.md section 5; every endpoint is marked `live` (checked against the routes 2026-10-20, BK-34 fields added).
 - [ ] A walkthrough of the two-step payment and polling with the app team.
 
 ## Next phase

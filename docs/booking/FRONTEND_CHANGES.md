@@ -4,6 +4,16 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-10-20 · Deposit receipt and destination on the booking (BK-34)
+
+**Changed response → the Booking (create / get / list, business bookings):**
+- `depositPaid`: the deposit actually paid, or `null`.
+- `depositPayment` and `chargePayment` also carry `amount`, `receipt` (M-Pesa code, once succeeded), `paidAt`, and `destination` `{type: mpesa_till | mpesa_paybill | bank_account, label}`, e.g. "Till 123456" or "Equity Bank Kenya, account …6789". The destination is what the payment was routed to at the time, not the business's current settings.
+
+**App:** done. The customer's booking shows the receipt and where it went; the owner's appointment shows a Deposit card and splits deposit and checkout once paid.
+
+---
+
 ## 2026-10-20 · Notification settings, booking emails, more booking notifications
 
 **Changed response → `auth.json#get-notification-preferences`:** adds `categories` (only those that apply: `bookings`, `reminders`, `business`, `payouts`, `team`, each `{push, sms, email}`) and `availableChannels`. `reminders` keeps its old fields plus `email`. PATCH takes `categories.<category>.<channel>` and `reminders.dayBefore / twoHoursBefore`. In-app is always on.

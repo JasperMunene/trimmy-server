@@ -87,12 +87,25 @@ class BookingLineResponse(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class PaymentDestinationResponse(BaseModel):
+    """Where an M-Pesa payment was routed (D1: straight to the business). Account numbers are
+    shortened to their last 4 characters."""
+
+    type: str  # mpesa_till | mpesa_paybill | bank_account
+    label: str  # e.g. "Till 123456", "Equity Bank Kenya, account …6789"
+
+
 class DepositPaymentResponse(BaseModel):
-    """The latest attempt to pay this booking's deposit (from BK-31)."""
+    """The latest attempt to pay this booking's deposit (from BK-31), or its checkout charge."""
 
     payment_id: uuid_pkg.UUID = Field(alias="paymentId")
     status: str  # pending | succeeded | failed | timeout
     failure_reason: Optional[str] = Field(None, alias="failureReason")  # cancelled | insufficient_funds | wrong_pin | timeout | busy | failed
+    # BK-34: what was asked for, and once it succeeded, the M-Pesa receipt and where it went.
+    amount: Optional[Money] = None
+    receipt: Optional[str] = None
+    paid_at: Optional[datetime] = Field(None, alias="paidAt")
+    destination: Optional[PaymentDestinationResponse] = None
 
     model_config = {"populate_by_name": True}
 
@@ -150,6 +163,8 @@ class BookingResponse(BaseModel):
     duration_minutes: int = Field(alias="durationMinutes")
     total_amount: Money = Field(alias="totalAmount")
     deposit_amount: Optional[Money] = Field(None, alias="depositAmount")
+    # BK-34: the deposit actually paid (null if none was, or it hasn't been yet).
+    deposit_paid: Optional[Money] = Field(None, alias="depositPaid")
     status: str
     source: str
     payment_status: str = Field(alias="paymentStatus")  # unpaid | deposit_paid | paid
