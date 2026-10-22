@@ -37,6 +37,8 @@ class Payment(Base):
     kind: Mapped[str] = mapped_column(String(20), nullable=False, default=PaymentKind.DEPOSIT)
     provider: Mapped[str] = mapped_column(String(20), nullable=False, default="mpesa")
     amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    # The part of `amount` that's a tip for the staff member (a checkout charge can include one).
+    tip_amount: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="KES")
     phone: Mapped[str] = mapped_column(Text, nullable=False)  # 2547XXXXXXXX as sent to M-Pesa
 

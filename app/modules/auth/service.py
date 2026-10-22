@@ -170,6 +170,9 @@ class AuthService:
         user.phone = data.phone
         user.verified = True
         user.verified_at = datetime.now(timezone.utc)
+        # Bookings a business made for this proven phone / email become theirs (customer_match.py).
+        from app.modules.booking.customer_match import claim_bookings
+        await claim_bookings(self.db, user)
 
         await self.db.delete(auth_token)
         tokens = self._issue_tokens(user)
@@ -268,6 +271,10 @@ class AuthService:
         user.email = data.email
         user.verified = True
         user.verified_at = datetime.now(timezone.utc)
+        user.phone_verified_at = user.verified_at  # the SMS code just proved it
+        # Bookings a business made for this proven phone / email become theirs (customer_match.py).
+        from app.modules.booking.customer_match import claim_bookings
+        await claim_bookings(self.db, user)
 
         await self.db.delete(auth_token)
         tokens = self._issue_tokens(user)
@@ -367,6 +374,9 @@ class AuthService:
 
         user.verified = True
         user.verified_at = datetime.now(timezone.utc)
+        # Bookings a business made for this proven phone / email become theirs (customer_match.py).
+        from app.modules.booking.customer_match import claim_bookings
+        await claim_bookings(self.db, user)
         await self.db.delete(auth_token)
         tokens = self._issue_tokens(user)
 
@@ -376,16 +386,19 @@ class AuthService:
         return AuthResponse(user=UserResponse.model_validate(user), tokens=tokens)
 
     async def forgot_password(self, data: ForgotPasswordRequest) -> dict:
-        await self._send_otp(data.email, "password_reset")
+        if data.email:
+            await self._send_otp(data.email, "password_reset")
+        else:
+            await self._send_reset_sms(self._reset_phone(data.phone))
         return {"message": "If an account exists, a reset code has been sent."}
 
     async def verify_reset_otp(self, data: VerifyResetOtpRequest) -> dict:
         # Checks without consuming, but a wrong guess still counts as an attempt.
-        await self._check_otp(data.email, data.otp, "password_reset")
+        await self._check_reset_otp(data, data.otp)
         return {"valid": True}
 
     async def reset_password(self, data: ResetPasswordRequest) -> dict:
-        user, auth_token = await self._check_otp(data.email, data.otp, "password_reset")
+        user, auth_token = await self._check_reset_otp(data, data.otp)
 
         user.password_hash = get_password_hash(data.new_password)
         await self.db.delete(auth_token)
@@ -423,6 +436,8 @@ class AuthService:
                         detail={"error": "phone_taken", "message": "Phone number is already in use"},
                     )
             user.phone = data.phone
+            # Not proven by a code: it no longer links bookings to this account (customer_match.py).
+            user.phone_verified_at = None
 
         await self.db.commit()
         await self.db.refresh(user)
@@ -500,6 +515,51 @@ class AuthService:
         await self.db.commit()
 
         await send_otp_email.enqueue(kind=purpose, to=user.email, otp=otp)
+
+    # ─── Account recovery by phone ────────────────────────────
+    # Only a phone proven with a code (phone_verified_at) gets a reset code: a
+    # number someone merely typed into their profile could belong to anyone,
+    # and that person could otherwise take over the account.
+
+    @staticmethod
+    def _reset_phone(raw: str) -> str:
+        try:
+            return normalise_phone(raw, default_country=settings.SMS_DEFAULT_COUNTRY)
+        except InvalidPhoneNumberError:
+            raise HTTPException(status_code=422, detail={"error": "invalid_phone", "message": "Enter a valid phone number"})
+
+    async def _user_by_verified_phone(self, phone: str) -> Optional[User]:
+        return (await self.db.execute(
+            select(User).where(User.phone == phone, User.phone_verified_at.is_not(None))
+        )).scalar_one_or_none()
+
+    async def _send_reset_sms(self, phone: str) -> None:
+        """Like _send_otp, by SMS: rate-limited per number (logged as "phone:<number>" with the
+        email sends) whether or not an account exists, so neither the answer nor a 429 reveals one."""
+        key, purpose = f"phone:{phone}", "password_reset"
+        retry_after = await self._send_retry_after(key, purpose)
+        if retry_after:
+            raise HTTPException(
+                status_code=429,
+                detail={"error": "too_many_requests", "message": "Please wait before requesting another code.",
+                        "retry_after_seconds": retry_after},
+                headers={"Retry-After": str(retry_after)},
+            )
+        self._log_send(key, purpose)
+        user = await self._user_by_verified_phone(phone)
+        if not user:
+            await self.db.commit()
+            return
+        await self._delete_tokens_by_purpose(user.id, purpose)
+        otp = self._generate_otp(user.id, purpose=purpose)
+        await self.db.commit()
+        await send_otp_sms.enqueue(kind=purpose, to=phone, otp=otp)
+
+    async def _check_reset_otp(self, data, otp: str) -> tuple[User, "AuthToken"]:
+        if data.email:
+            return await self._check_otp(data.email, otp, "password_reset")
+        user = await self._user_by_verified_phone(self._reset_phone(data.phone))
+        return await self._check_otp_user(user, otp, "password_reset")
 
     async def _send_allowed(self, email: str, purpose: str) -> bool:
         return await self._send_retry_after(email, purpose) == 0

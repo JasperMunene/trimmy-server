@@ -17,6 +17,8 @@ class Collected(BaseModel):
     mpesa: AmountCount
     deposits_collected: AmountCount = Field(alias="depositsCollected")
     balance_payments: AmountCount = Field(alias="balancePayments")  # checkout charges
+    # Tips inside cash / mpesa above: owed to staff (already in their wallets), not the business's.
+    tips: AmountCount = AmountCount(amount=0, count=0)
 
     model_config = {"populate_by_name": True}
 

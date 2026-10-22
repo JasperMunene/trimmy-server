@@ -122,7 +122,7 @@ sequenceDiagram
     Daraja-->>API: CheckoutRequestID
     API-->>App: 202 {paymentId, status: pending}
     Note over App: customer enters PIN on their phone
-    Daraja->>API: POST /payments/mpesa/callback/{secret}
+    Daraja->>API: POST /payments/stk/callback/{secret}
     API->>API: payment succeeded, booking confirmed
     API->>Worker: enqueue booking.send_confirmation
     loop every 3s, up to 90s
@@ -131,7 +131,7 @@ sequenceDiagram
     Worker->>Daraja: STK query for payments pending over 60s (lost callbacks)
 ```
 
-- **Routing (D1):** the push is signed with Trimmy's `BusinessShortCode` and passkey. `PartyB`, `TransactionType` and `AccountReference` come from the business's saved payment destination (port the logic from `payment-routing-test/mpesa.go`). `AccountReference` is capped at 12 characters by Daraja.
+- **Routing (D1):** the push is signed with Trimmy's `BusinessShortCode` and passkey. `PartyB`, `TransactionType` and `AccountReference` come from the business's saved payment destination (port the logic from `payment-routing-test/mpesa.go`). Account numbers are capped at 20 characters (Daraja documents 12 for `AccountReference`; see BK-36).
 - **The STK push is called from the request**, not the worker, so the app gets an immediate error for a bad phone number or a Daraja outage. Everything after that is asynchronous.
 - **The callback URL** carries a long random secret in its path, plus a check that the `CheckoutRequestID` exists and is still pending. It's idempotent, because Daraja retries. Once in production, restrict it to Safaricom's published IP ranges at the proxy.
 - **Result codes** map to what the app shows: `0` success, `1032` cancelled by the user, `1037` or no answer means timeout, `1` insufficient funds, `2001` wrong PIN. Each failure leaves the booking in `pending_payment`, so the customer can retry until `expiresAt`.
@@ -160,7 +160,7 @@ Customer endpoints (Bearer token, any verified user):
 | GET | `/bookings/{id}` | Booking detail, including the latest deposit payment's status (used for polling) |
 | GET | `/me/bookings?filter=upcoming\|past\|cancelled` | My Appointments tabs |
 | POST | `/bookings/{id}/payments` | `{ phone }` sends the STK push, then returns `202 { paymentId, status: "pending" }` |
-| POST | `/payments/mpesa/callback/{secret}` | Daraja only; not in the app contract |
+| POST | `/payments/stk/callback/{secret}` | Daraja only; not in the app contract |
 
 **Changes from the app's `booking.json` (the app team needs to agree to these):**
 

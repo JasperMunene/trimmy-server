@@ -25,12 +25,13 @@ async def test_accepted_front_desk_is_not_bookable(client, auth_headers, member,
     business.status = "published"
     await db_session.commit()
     listed = [s for s in (await client.get(f"/api/v1/businesses/{biz_id}/profile")).json()["staff"] if s["staffId"] == roster["staffId"]]
-    # Listed (every accepted member is), but with no services, so Select Staff hides them.
-    assert listed and (listed[0]["role"], listed[0]["allServices"], listed[0]["serviceIds"]) == ("front_desk", False, [])
+    assert listed == []  # customers never see the front desk
+    cust = headers_for(await make_user(db_session, "fav.desk@example.com"))
+    assert (await client.put(f"/api/v1/me/favorites/staff/{roster['staffId']}", headers=cust)).status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_profile_lists_every_accepted_member(client, auth_headers, member, db_session):
+async def test_profile_lists_every_accepted_stylist(client, auth_headers, member, db_session):
     _, member_headers = member
     biz_id = await _business(client, auth_headers)
     await _invite_and_accept(client, auth_headers, member_headers, biz_id)  # no rating, no photo

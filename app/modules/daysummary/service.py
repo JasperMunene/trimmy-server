@@ -78,7 +78,9 @@ class DaySummaryService:
         text = (
             f"Trimmy: {name} submitted {business.name}'s day ({day.strftime('%a %-d %b')}): KES {total:,} collected "
             f"(cash {s.collected.cash.amount:,}, M-Pesa {s.collected.mpesa.amount:,}), {s.completed} completed, "
-            f"{len(s.unpaid)} unpaid." + (f" Note: {notes}" if notes else "")
+            f"{len(s.unpaid)} unpaid."
+            + (f" Includes KES {s.collected.tips.amount:,} in tips for staff." if s.collected.tips.amount else "")
+            + (f" Note: {notes}" if notes else "")
         )
         owner = await self.db.get(User, business.owner_id)
         if owner is not None and owner.phone:
@@ -155,6 +157,8 @@ class DaySummaryService:
                 "mpesa": tally(p for p in paid_today if p.provider == "mpesa"),
                 "depositsCollected": tally(p for p in paid_today if p.kind == PaymentKind.DEPOSIT),
                 "balancePayments": tally(p for p in paid_today if p.kind == PaymentKind.CHARGE),
+                "tips": {"amount": sum(p.tip_amount or 0 for p in paid_today),
+                         "count": sum(1 for p in paid_today if p.tip_amount)},
             },
             refundsPaid={"amount": sum(a or 0 for a in refunded), "count": len(refunded)},
             unpaid=unpaid,

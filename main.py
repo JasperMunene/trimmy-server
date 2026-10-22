@@ -16,12 +16,15 @@ from app.core.storage import LocalStorage, get_storage
 from app.workers.broker import publisher
 from app.modules.auth.router import router as auth_router
 from app.modules.booking.router import availability_router, bookings_router, my_bookings_router
+from app.modules.booking.time_off import router as time_off_router
 from app.modules.customers.router import router as customers_router
 from app.modules.favorites.router import router as favorites_router
 from app.modules.payouts.router import router as payouts_router
 from app.modules.earnings.router import router as earnings_router
 from app.modules.notifications.router import router as push_router
 from app.modules.notifications.preferences import router as notification_prefs_router
+from app.modules.notifications.inbox import events_router, inbox_router
+from app.modules.notifications.realtime import hub as realtime_hub
 from app.modules.daysummary.router import router as day_summary_router
 from app.modules.business.router import discovery_router
 from app.modules.business.router import options_router
@@ -42,6 +45,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     await publisher.start()
     yield
+    await realtime_hub.stop()
     await publisher.stop()
 
 
@@ -93,7 +97,10 @@ app.include_router(payouts_router, prefix=settings.API_V1_STR)
 app.include_router(earnings_router, prefix=settings.API_V1_STR)
 app.include_router(push_router, prefix=settings.API_V1_STR)
 app.include_router(notification_prefs_router, prefix=settings.API_V1_STR)
+app.include_router(inbox_router, prefix=settings.API_V1_STR)
+app.include_router(events_router, prefix=settings.API_V1_STR)
 app.include_router(day_summary_router, prefix=settings.API_V1_STR)
+app.include_router(time_off_router, prefix=settings.API_V1_STR)
 app.include_router(business_router, prefix=settings.API_V1_STR)
 app.include_router(team_router, prefix=settings.API_V1_STR)
 app.include_router(options_router, prefix=settings.API_V1_STR)

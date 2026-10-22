@@ -31,6 +31,8 @@ EXTERNAL_SEND_SETTINGS = (
 )
 for _name in EXTERNAL_SEND_SETTINGS:
     os.environ[_name] = ""
+# The live stream runs in-process in tests (no Redis needed).
+os.environ["REALTIME_BACKEND"] = "local"
 
 from app.core.base import Base
 from app.core.database import get_db

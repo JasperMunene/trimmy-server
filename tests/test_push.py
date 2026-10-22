@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 import app.modules.notifications.push as push
 import app.workers.registry as registry
 from app.core.config import settings
-from app.modules.business.models import Staff
+from app.modules.business.models import Business, Staff
 from app.modules.notifications.models import PushToken
 from app.workers.registry import TASKS, discover_tasks
 from tests.test_create_booking import customer, salon  # noqa: F401  (fixtures)
@@ -79,6 +79,7 @@ def expo(monkeypatch):
 
     real_client = httpx.AsyncClient
     monkeypatch.setattr(settings, "EXPO_PUSH_URL", "https://expo.test/push/send")
+    monkeypatch.setattr(settings, "NOTIFY_PUSH_ENABLED", True)
     monkeypatch.setattr(push.httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw))
     return state
 
@@ -152,4 +153,6 @@ async def test_payout_answer_notifies_the_staff_member(client, auth_headers, sal
     await paid_visit(client, auth_headers, salon)
     payout = (await client.post("/api/v1/payouts", json={"businessId": salon["id"], "amount": 100}, headers=headers_for(user))).json()
     await client.post(f"/api/v1/payouts/{payout['payoutId']}/respond", json={"action": "approve"}, headers=auth_headers)
-    assert calls == [(user.id, "Payout approved", "payout_responded")]
+    owner_id = (await db_session.get(Business, uuid.UUID(salon["id"]))).owner_id
+    # The owner hears about the request, the staff member about the answer.
+    assert calls == [(owner_id, "Payout request", "payout_requested"), (user.id, "Payout approved", "payout_responded")]

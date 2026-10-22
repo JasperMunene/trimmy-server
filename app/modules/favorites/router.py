@@ -68,7 +68,8 @@ async def list_favorites(current_user: User = Depends(get_current_user), db: Asy
             select(Staff, Business.name)
             .join(FavoriteStaff, FavoriteStaff.staff_id == Staff.id)
             .join(Business, Business.id == Staff.business_id)
-            .where(FavoriteStaff.user_id == current_user.id, Business.status == BusinessStatus.PUBLISHED)
+            .where(FavoriteStaff.user_id == current_user.id, Business.status == BusinessStatus.PUBLISHED,
+                   Staff.role != "front_desk")
             .order_by(FavoriteStaff.created_at.desc())
         )
     ).all()
@@ -109,7 +110,7 @@ async def save_staff(staff_id: str, current_user: User = Depends(get_current_use
     sid = _uuid(staff_id, "staff member")
     found = await db.execute(
         select(Staff.id).join(Business, Business.id == Staff.business_id)
-        .where(Staff.id == sid, Business.status == BusinessStatus.PUBLISHED)
+        .where(Staff.id == sid, Business.status == BusinessStatus.PUBLISHED, Staff.role != "front_desk")
     )
     if found.first() is None:
         raise _not_found("staff member")

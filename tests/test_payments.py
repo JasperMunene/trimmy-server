@@ -66,7 +66,12 @@ async def test_sends_the_prompt_routed_to_the_business(client, customer, pending
     assert payment.checkout_request_id.startswith("ws_CO_")
 
     seen = (await client.get(f"/api/v1/bookings/{pending_booking['bookingId']}", headers=cust)).json()
-    assert seen["depositPayment"] == {"paymentId": data["paymentId"], "status": "pending", "failureReason": None}
+    assert seen["depositPayment"] == {
+        "paymentId": data["paymentId"], "status": "pending", "failureReason": None,
+        "amount": seen["depositAmount"], "receipt": None, "paidAt": None,  # BK-34: receipt once it succeeds
+        "destination": seen["depositPayment"]["destination"],
+    }
+    assert seen["depositPaid"] is None
     assert seen["status"] == "pending_payment"
 
 
@@ -158,3 +163,23 @@ async def test_mpesa_not_configured(client, customer, pending_booking):
     payments_service.get_provider.cache_clear()  # the real one, with the blanked test settings
     resp = await pay(client, cust, pending_booking["bookingId"])
     assert resp.status_code == 503 and resp.json()["error"] == "payments_unavailable"
+
+
+# ─── BK-34: the deposit on the booking ───────────────────────
+
+
+@pytest.mark.asyncio
+async def test_paid_deposit_shows_receipt_and_destination(db_session):
+    from app.modules.booking.bookings import _payment_response
+    from app.modules.payments.models import Payment
+
+    p = Payment(id=uuid.uuid4(), booking_id=uuid.uuid4(), amount=300, phone="254700000001",
+                destination_type="bank_account", party_b="247247", account_reference="0123456789",
+                status="succeeded", mpesa_receipt="SJK1ABC2DE", settled_at=datetime.now(timezone.utc))
+    r = _payment_response(p)
+    assert r.receipt == "SJK1ABC2DE" and r.amount.amount == 300 and r.paid_at is not None
+    assert r.destination.label == "Equity Bank Kenya, account …6789"
+
+    p.status, p.destination_type, p.party_b = "pending", "mpesa_till", "123456"
+    r = _payment_response(p)
+    assert r.receipt is None and r.paid_at is None and r.destination.label == "Till 123456"

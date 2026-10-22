@@ -210,7 +210,23 @@ class AvailabilityService:
                 .options(selectinload(Booking.lines))
             )
         ).scalars().all()
-        return [to_existing(b) for b in rows if b.id != exclude_id]
+        # Staff time off (S4) blocks that person like a booking would, on every path that checks
+        # availability (slots, new bookings, reschedule, assigning, walk-ins).
+        from app.modules.booking.models import StaffTimeOff
+
+        time_off = (
+            await self.db.execute(
+                select(StaffTimeOff.staff_id, StaffTimeOff.starts_at, StaffTimeOff.ends_at).where(
+                    StaffTimeOff.business_id == ctx.business.id,
+                    StaffTimeOff.starts_at < end + margin,
+                    StaffTimeOff.ends_at > start - margin,
+                )
+            )
+        ).all()
+        return [to_existing(b) for b in rows if b.id != exclude_id] + [
+            availability.ExistingBooking(start=_aware(s), end=_aware(e), status="confirmed", staff_id=staff_id)
+            for staff_id, s, e in time_off
+        ]
 
 
 def _aware(dt: datetime) -> datetime:

@@ -50,10 +50,18 @@ class BookingRow:
     no_show_fee: int = 0
     refund_amount: int = 0
     refund_status: Optional[str] = None
+    paid_at: Optional[datetime] = None  # business local time, when the balance was settled
 
     @property
     def paid(self) -> bool:
         return self.payment_status == "paid"
+
+    @property
+    def when(self) -> datetime:
+        """The day it counts on: when it was paid for paid bookings (cash basis, as the wallet and
+        the day summary count it), so a visit done early or charged late lands on the day the money
+        came in; when it was booked for, otherwise."""
+        return self.paid_at if self.paid and self.paid_at else self.starts
 
 
 @dataclass(frozen=True)
@@ -61,7 +69,8 @@ class PaymentRow:
     booking_id: uuid_pkg.UUID
     kind: str  # deposit | charge
     provider: str  # mpesa | cash
-    amount: int
+    amount: int  # what came in, tip included
+    tip: int = 0  # the part of amount owed on to the staff member
 
 
 @dataclass
@@ -95,6 +104,7 @@ class Summary:
     no_show_fees: int = 0
     refunds_due: int = 0
     refunds_paid: int = 0
+    tips: int = 0  # tips paid with checkout charges: in `collected`, not in revenue
 
 
 def granularity_for(start: datetime, end: datetime) -> str:
@@ -144,14 +154,14 @@ def summarise(
     with_staff_breakdown: bool = True,
 ) -> Summary:
     """`bookings` may include ones outside [start, end); they're filtered here."""
-    in_range = [b for b in bookings if start <= b.starts < end]
+    in_range = [b for b in bookings if start <= b.when < end]
     paid = [b for b in in_range if b.paid]
     total = sum(b.total for b in paid)
 
     granularity, buckets = make_buckets(start, end)
     for b in paid:
         for bucket in buckets:
-            if bucket.start <= b.starts < bucket.end:
+            if bucket.start <= b.when < bucket.end:
                 bucket.amount += b.total
                 bucket.bookings_count += 1
                 break
@@ -184,8 +194,8 @@ def summarise(
         {
             "bookingId": b.booking_id,
             "serviceId": line.service_id,
-            "date": b.starts.date().isoformat(),
-            "time": b.starts.strftime("%H:%M"),
+            "date": b.when.date().isoformat(),
+            "time": b.when.strftime("%H:%M"),
             "customerName": b.customer_name,
             "serviceName": line.name,
             "amount": line.amount,
@@ -235,6 +245,7 @@ def summarise(
         no_show_fees=sum(b.no_show_fee for b in in_range if b.status == "no_show"),
         refunds_due=sum(b.refund_amount for b in in_range if b.refund_status == "due"),
         refunds_paid=sum(b.refund_amount for b in in_range if b.refund_status == "refunded"),
+        tips=sum(p.tip for p in payments if p.booking_id in in_range_ids),
     )
 
 

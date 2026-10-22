@@ -53,11 +53,11 @@ async def charge_booking(
 ):
     """Owner or front desk: take the balance (total minus any deposit paid) for an in-progress
     booking. Cash completes it at once; M-Pesa sends the prompt, then poll GET /bookings/{id}."""
-    code, body = await PaymentsService(db).charge(current_user, booking_id, data.method, data.phone)
+    code, body = await PaymentsService(db).charge(current_user, booking_id, data.method, data.phone, data.tip)
     return JSONResponse(status_code=code, content=jsonable_encoder(body, by_alias=True))
 
 
-@router.post("/mpesa/callback/{secret}", include_in_schema=False)
+@router.post("/stk/callback/{secret}", include_in_schema=False)
 async def mpesa_callback(secret: str, request: Request, db: AsyncSession = Depends(get_db)):
     """Daraja posts STK push results here (the URL comes from MPESA_CALLBACK_URL + secret).
 

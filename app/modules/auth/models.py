@@ -23,6 +23,8 @@ class User(Base):
     first_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     last_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     phone: Mapped[Optional[str]] = mapped_column(Text, unique=True, nullable=True, index=True)
+    # When the phone was proven with a code (phone signup). Cleared if it's changed without one.
+    phone_verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     # Google's stable account id ("sub"); set once the user has signed in with Google.
     google_sub: Mapped[Optional[str]] = mapped_column(Text, unique=True, nullable=True, index=True)
     verified: Mapped[bool] = mapped_column(Boolean, default=False, index=True)

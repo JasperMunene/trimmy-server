@@ -4,6 +4,245 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 ---
 
+## 2026-10-20 · Account recovery by phone
+
+**`auth.json#forgot-password`, `#verify-reset-otp`, `#reset-password`:** each now takes `phone` instead of `email`. An SMS code only goes to a phone proven with a code (`phone_verified_at`), so a number typed into someone's profile can't be used to take over their account. The answer is the same whether or not an account exists, and the per-number send limits match email's.
+
+**App:** done. Forgot password has an Email / Phone switch, and the code and new-password steps carry the choice through.
+
+---
+
+## 2026-10-20 · Business bookings reach the customer's app; tips at checkout; earnings by payment date
+
+**Customer matching (walk-in, scheduled):**
+- When the phone or email given belongs to a Trimmy account, the booking is linked to that account: it shows in their app and they get its notifications. The response has `customerHasAccount: true`.
+- Only proven contacts count: a phone verified with a code, or an email verified at signup or by Google. Changing your phone in the profile un-verifies it (`users.phone_verified_at`, migration `028`).
+- Someone who signs up later with that phone or email takes over their bookings from the last 180 days.
+
+**Tips → `fulfillment.json#charge-booking`:**
+- Optional `tip`, charged together with the balance: one M-Pesa prompt, or one cash record.
+- When the payment succeeds, the tip goes to the staff member's wallet as a `tip` linked to the booking, they're notified, and the booking's `tip` is set.
+- It isn't revenue or commission: `money.tips` in earnings, `collected.tips` in the day summary.
+- `400 tip_needs_staff` if nobody is assigned.
+
+**Earnings dates:** paid bookings now count on the day they were paid, not the day they were booked for. This is the same as the wallet and the day summary. A future appointment done and charged today now shows in today's earnings.
+
+**App:** done.
+- The charge sheet has tip quick picks (None / 50 / 100 / 200) plus "Other amount", and the totals update.
+- The Payment card shows the tip.
+- The customer card shows "On Trimmy" for linked bookings.
+- The day summary has a "Tips for staff" line.
+- The separate after-checkout tip only shows when no tip came with the charge.
+
+---
+
+## 2026-10-20 · Staff time off (S4), and one payout by id
+
+**New endpoints → `team.json`:**
+- `GET /businesses/{businessId}/time-off?from=&to=[&staffId=]`: the owner and front desk see everyone's; staff see their own.
+- `POST /businesses/{businessId}/staff/{staffId}/time-off`: `{date, start, end}` or `{date, allDay: true, until?}`, in business-local time. `409 has_bookings` (with `references`) if they have bookings then.
+- `DELETE /time-off/{timeOffId}`.
+
+Time off works like a booking for that person on every availability path: customer slots, new bookings, walk-ins, on-behalf bookings, reschedule and assign. Migration `027`.
+
+**New endpoint → `fulfillment.json#get-payout`:** `GET /payouts/{payoutId}` for the owner or the staff member who asked.
+
+**App:** done.
+- Staff Menu → Time off.
+- Owner: Team → member → Time off.
+- Front desk Today is now a staff × time day grid (F1) that shows time off; tap a name to manage theirs.
+- Payout detail loads itself, so a `payout_requested` notification opens it directly.
+
+---
+
+## 2026-10-20 · Deposit receipt and destination on the booking (BK-34)
+
+**Changed response → the Booking (create / get / list, business bookings):**
+- `depositPaid`: the deposit actually paid, or `null`.
+- `depositPayment` and `chargePayment` also carry `amount`, `receipt` (M-Pesa code, once succeeded), `paidAt`, and `destination` `{type: mpesa_till | mpesa_paybill | bank_account, label}`, e.g. "Till 123456" or "Equity Bank Kenya, account …6789". The destination is what the payment was routed to at the time, not the business's current settings.
+
+**App:** done. The customer's booking shows the receipt and where it went; the owner's appointment shows a Deposit card and splits deposit and checkout once paid.
+
+---
+
+## 2026-10-20 · Notification settings, booking emails, more booking notifications
+
+**Changed response → `auth.json#get-notification-preferences`:** adds `categories` (only those that apply: `bookings`, `reminders`, `business`, `payouts`, `team`, each `{push, sms, email}`) and `availableChannels`. `reminders` keeps its old fields plus `email`. PATCH takes `categories.<category>.<channel>` and `reminders.dayBefore / twoHoursBefore`. In-app is always on.
+
+**Booking emails** (customer, per `bookings` / `reminders` email setting; guests without an account get them at the booking's email): confirmed, cancelled by the business, moved by the business, refund due, refunded, no-show, completed (receipt), and the 24h reminder (email off by default).
+
+**New notification types:**
+- To the customer (`/booking/{bookingId}`): `booking_rescheduled_by_business` (replaces the plain "confirmed" on a business reschedule), `booking_payment_failed`, `booking_hold_expired`, `booking_refund_due`, `booking_refunded`, `booking_no_show`, `booking_completed`.
+- To the staff member: `booking_cancelled_for_staff` (`/appointment/{bookingId}`).
+- To owner and front desk: `booking_refund_owed` (`/manage-business/refunds`).
+
+**Behaviour changes:**
+- Customers without a phone number now get reminders: in the app, and by push or email as their settings allow.
+- A business cancellation now also texts the customer (BK-60's open item).
+- Staff are told about a deposit booking only once it's paid, not while it's still on hold.
+- `booking_completed` goes out once per booking, when the visit is paid.
+
+**Server:** migration `026`; `booking/messages.py` holds the wording of every booking notification; `notifications/after_commit.py` sends only if the change commits.
+
+---
+
+## 2026-10-20 · In-app notifications: inbox, live stream, new events
+
+**Why:** every notification now lands in an in-app inbox and is streamed to the open app; push, SMS and email are extra channels with switches. Push is **off** (`NOTIFY_PUSH_ENABLED=false`) until the EAS project, APNs key and FCM credentials exist; tokens are still collected.
+
+**New endpoints → `auth.json`:** `GET /me/notifications` (cursor pages, `unread=true`, `unreadCount`), `GET /me/notifications/unread-count`, `POST /me/notifications/{id}/read`, `POST /me/notifications/read-all`, `POST /me/notifications/test`, and `GET /me/events` (server-sent events: `ready`, `notification`, `resync`, `reconnect`, `: ping` every 20s; send `Last-Event-ID` to replay what was missed).
+
+**New notification types** (inbox, stream, and push once on):
+
+| type | to | data | opens |
+| --- | --- | --- | --- |
+| `booking_created` | owner, front desk | bookingId, businessId | `/appointment/{bookingId}` |
+| `booking_cancelled_by_customer` | owner, front desk, assigned staff | bookingId, businessId | `/appointment/{bookingId}` |
+| `booking_rescheduled_by_customer` | owner, front desk, assigned staff | bookingId, businessId | `/appointment/{bookingId}` |
+| `payout_requested` | owner | payoutId, businessId | `/payouts` |
+| `team_invitation` | invitee with an account | invitationId, businessId | `/profile` |
+
+Invitees without an account get an SMS and/or email instead. Every existing push type (`booking_confirmed`, reminders, `booking_assigned`, `payout_responded`, `wallet_adjusted`, `day_summary_submitted`) is now also in the inbox. Whoever caused an event isn't notified about it.
+
+**Server:** migration `025` (`notifications`, `notification_deliveries`), `app/modules/notifications/{dispatch,realtime,inbox}.py`. One Redis pattern subscription per API process fans events out in memory, so open streams hold no database or Redis connections. `notifications.prune` deletes rows older than 90 days. Settings: `NOTIFY_PUSH_ENABLED`, `NOTIFY_SMS_ENABLED`, `NOTIFY_EMAIL_ENABLED`, `REALTIME_BACKEND`, `SSE_*`, `APP_DOWNLOAD_URL`.
+
+**Deploy checklist:** run migration 025; whatever proxies api.trimmy.com must not buffer `/api/v1/me/events` and must allow idle reads of at least 60s. The server already sends `X-Accel-Buffering: no` (nginx honours it) and a heartbeat every 20s.
+
+---
+
+## 2026-10-03 · Front desk hidden from customers
+
+**Changed response → `discovery.json#get-business-profile`**: `staff[]` no longer includes front desk members. Only people a customer could book are listed: staff and an owner who takes clients.
+
+- **Favorites:** a front desk member can't be saved (`PUT /me/favorites/staff/{staffId}` → `404`). Any already saved no longer appear in `GET /me/favorites`.
+- **Front desk app:** its staff picker (assign staff, walk-ins) can keep using the profile's `staff[]`, which now holds exactly the bookable people. The full team, front desk included, is still in `list-team-members` (owner).
+- This replaces the earlier note "the public profile lists every accepted staff member … including front desk".
+
+**App code to update:** drop any client-side filtering of `role === "front_desk"` on the profile.
+
+---
+
+## 2026-10-03 · Staff wallet: statement, adjustments, one wallet across businesses
+
+**Why:** the staff Earnings / wallet screens can now show a real statement. Owners can record tips, bonuses, deductions and advances, and someone working at two salons sees one wallet. Trimmy still never moves this money.
+
+**Changed response → `get-payout-balance`** (`/me/payouts/balance` and `/businesses/{id}/staff/{staffId}/payout-balance`): new `tips`, `bonuses`, `deductions` and `advances`.
+
+- `available` = `earned + tips + bonuses - deductions - advances - pending - paid`.
+- `available` **can be negative** after a deduction or an advance. Payout requests are refused until it's back above 0.
+
+**New endpoints → `fulfillment.json`**
+
+```json
+{
+  "id": "get-my-wallet",
+  "status": "live",
+  "screen": "Staff Earnings (wallet), across every business they work at",
+  "method": "GET",
+  "path": "/me/wallet",
+  "auth": "any signed-in user (empty for someone with no staff record)",
+  "response": {
+    "currency": "KES", "earned": 470, "tips": 200, "bonuses": 0, "deductions": 0, "advances": 0,
+    "pending": 0, "paid": 0, "available": 670,
+    "businesses": [
+      { "businessId": "uuid", "businessName": "Glow Beauty", "role": "staff", "staffId": "uuid", "currency": "KES",
+        "earned": 320, "tips": 200, "bonuses": 0, "deductions": 0, "advances": 0, "pending": 0, "paid": 0,
+        "available": 520, "commissionPercent": 40 }
+    ]
+  }
+},
+{
+  "id": "get-wallet-statement",
+  "status": "live",
+  "screen": "Wallet → Transactions; owner Member Detail → Wallet",
+  "method": "GET",
+  "path": "/me/wallet/transactions?businessId=uuid&limit=50&offset=0  |  /businesses/{businessId}/staff/{staffId}/wallet/transactions",
+  "auth": "/me: the staff member (businessId optional: omit for every business); /businesses/…: the owner, or that staff member",
+  "description": "Newest first. amount is the signed effect on the balance; balanceAfter is the balance right after that entry (in the requested scope), so the newest entry's balanceAfter = balance = available. type: commission (a paid booking, dated when it was paid) | tip | bonus | deduction | advance | payout. A payout's amount is negative while pending or paid and 0 once rejected (payoutAmount says what was asked). limit 1-100; pass nextOffset back as offset, null on the last page.",
+  "response": {
+    "currency": "KES", "balance": 420, "total": 4, "nextOffset": null,
+    "entries": [
+      { "entryId": "payout:uuid", "type": "payout", "at": "2026-10-03T12:00:00Z", "amount": -100, "balanceAfter": 420,
+        "businessId": "uuid", "businessName": "Glow Beauty", "description": "Payout requested",
+        "payoutId": "uuid", "payoutStatus": "pending", "payoutAmount": 100 },
+      { "entryId": "tip:uuid", "type": "tip", "at": "…", "amount": 200, "balanceAfter": 520, "description": "Tip: From Amina",
+        "adjustmentId": "uuid", "bookingId": "uuid", "note": "From Amina", "…": "…" },
+      { "entryId": "commission:uuid", "type": "commission", "at": "…", "amount": 320, "balanceAfter": 320,
+        "description": "Commission on BK7F3AQ9 (Amina)", "bookingId": "uuid", "bookingReference": "BK7F3AQ9", "…": "…" }
+    ]
+  }
+},
+{
+  "id": "add-wallet-adjustment",
+  "status": "live",
+  "screen": "Owner Member Detail → Add tip / bonus / deduction / advance; front desk checkout → Add tip",
+  "method": "POST",
+  "path": "/businesses/{businessId}/staff/{staffId}/wallet-adjustments",
+  "auth": "owner (any kind); front desk (tip only)",
+  "description": "tip and bonus add to the wallet; deduction and advance take from it (an advance = cash handed over ahead of a payout). amount is positive KES. bookingId is optional (e.g. the visit a tip was for). The staff member gets a push { type: wallet_adjusted, adjustmentId, businessId }.",
+  "request": { "kind": "tip", "amount": 200, "note": "From Amina", "bookingId": "uuid (optional)" },
+  "response": { "adjustmentId": "uuid", "businessId": "uuid", "staffId": "uuid", "staffName": "Wanjiku", "kind": "tip",
+                "amount": 200, "signedAmount": 200, "currency": "KES", "note": "From Amina", "bookingId": "uuid",
+                "createdAt": "…", "voidedAt": null },
+  "errors": [
+    { "status": 403, "code": "forbidden", "message": "Only the owner can do this (front desk can add tips)" },
+    { "status": 404, "code": "not_found", "message": "staffId / bookingId does not exist for this business" },
+    { "status": 422, "code": "validation_error", "message": "kind must be tip, bonus, deduction or advance; amount > 0" }
+  ]
+},
+{
+  "id": "void-wallet-adjustment",
+  "status": "live",
+  "method": "POST",
+  "path": "/wallet-adjustments/{adjustmentId}/void",
+  "auth": "owner",
+  "description": "Undo a mistaken adjustment: it stays on record (voidedAt set) but no longer counts and leaves the statement. The adjustmentId comes from the add response or a statement entry.",
+  "response": "Adjustment (voidedAt set)",
+  "errors": [{ "status": 409, "code": "already_voided", "message": "This adjustment was already voided" }]
+}
+```
+
+- Payouts are still **requested per business**, because each owner pays their own staff. `POST /payouts` needs `businessId` as before and checks that business's `available`.
+- Tips are recorded by hand: cash handed over, or the owner passing one on. A tip isn't added to the M-Pesa checkout charge.
+- Bookings paid before this change are dated in the statement by their payment (backfilled, migration `024`).
+
+**App code to update**
+
+- Staff wallet: show `GET /me/wallet` totals, a per-business row when there's more than one, and a Transactions list from `/me/wallet/transactions` with infinite scroll on `nextOffset`.
+- Payout request: pick the business (use that row's `available`).
+- Owner Member Detail: an "Adjust wallet" action (kind, amount, note) and the statement. A long-press "Void" on adjustments.
+- Front desk checkout: optional "Add tip for {staff}" after a charge (kind `tip`, `bookingId`).
+- Notification tap `wallet_adjusted` → the wallet.
+
+---
+
+## 2026-09-30 · Amenities on update-business-info (P3)
+
+**Fixed → `business-setup.json#update-business-info` (issues)**:
+
+- `PATCH /businesses/{businessId}` now saves `amenities`.
+  - Sending a list replaces the amenities; `[]` clears them.
+  - Leaving `amenities` out keeps them as they are, so older app versions don't wipe them.
+- `amenities` (always a list) is now in the responses of both `create-business` and `update-business-info`, as well as `get-business-draft` and the profile.
+
+**App code to update:** add amenities to Edit Business Info and send the full list on save.
+
+---
+
+## 2026-09-30 · Bookings by customer (P3)
+
+**Changed → `fulfillment.json#list-business-bookings` (issues)**: two new filters for Customer Detail's appointment history. With either, no `date` or `from`/`to` is needed, and results come **newest first**.
+
+- `GET /businesses/{businessId}/bookings?customerId=uuid`: `customerId` is the id from `list-customers`. It matches that customer's bookings by phone, or by email for a customer saved without a phone. A customer with neither gets `[]`.
+- `GET /businesses/{businessId}/bookings?phone=0722000111`: accepts a phone in any format. `400 invalid_phone` if it isn't a real number.
+- Works with `status=` (e.g. `status=completed`) and `limit=` (1–200, default 200).
+- Every source is included: online bookings, walk-ins and bookings made on the customer's behalf.
+- Same auth as before: owner / front desk see everything, and staff see only their own bookings with that customer. An unknown `customerId` is `404 not_found`.
+
+**App code to update:** Customer Detail → load the history with `?customerId=<customerId>` instead of the bookings cached on the device.
+
+---
+
 ## 2026-09-30 · Favorites (P3)
 
 **Now live → `discovery.json#favorites`**, for any signed-in user.
@@ -111,7 +350,7 @@ What the app needs to integrate or update, newest first. Each entry says which f
 
 **Answers → `fulfillment.json#frontDeskNote`:**
 
-- **Yes, the public profile lists every accepted staff member**, with or without ratings or photos (`staff[]` is every staff record at the business, including front desk and a solo owner). Each has `role`, `allServices`, `serviceIds` and `workingDays`, so the front desk app can build its staff and service pickers from it.
+- **Yes, the public profile lists every accepted staff member**, with or without ratings or photos (`staff[]` is every staff record at the business, including a solo owner; **front desk are hidden from it since 2026-10-03**). Each has `role`, `allServices`, `serviceIds` and `workingDays`, so the front desk app can build its staff and service pickers from it.
 - **Yes, front desk can call every endpoint marked "owner or front desk"**, now covered by a test: business bookings (all filters incl. `unassigned` and `refund=due`), walk-in, scheduled, assign staff, status changes, reschedule, charge, customers (list and save), mark refunded, day summary and submit. Owner-only stays owner-only: earnings, team management, staff services (set), business settings, payouts approval.
 - Note: the profile only exists for **published** businesses.
 

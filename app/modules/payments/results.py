@@ -16,6 +16,7 @@ from app.modules.booking.bookings import _lock_business_day
 from app.modules.booking.models import Booking, BookingEvent, BookingStatus, PaymentStatus as BookingPaymentStatus
 from app.modules.booking.service import AvailabilityService, _aware
 from app.modules.booking.states import REINSTATABLE_CANCEL_REASON, transition
+from app.modules.notifications.after_commit import notify_after_commit
 from app.modules.payments.models import Payment, PaymentKind, PaymentStatus
 from app.modules.payments.mpesa import PaymentResult
 
@@ -50,6 +51,10 @@ async def apply_result(
         payment.raw_callback = raw
 
     confirmed = False
+    if result.status in (PaymentStatus.FAILED, PaymentStatus.TIMEOUT) and payment.kind == PaymentKind.DEPOSIT:
+        # They may have left the payment screen: tell them it didn't go through while there's time to retry.
+        from app.modules.booking.tasks import push_update
+        notify_after_commit(db, lambda bid=payment.booking_id: push_update(bid, "payment_failed"))
     if result.status == PaymentStatus.SUCCEEDED:
         if result.amount is not None and result.amount != payment.amount:
             logger.error(f"Payment {payment.id}: M-Pesa reports KES {result.amount}, expected {payment.amount}")
@@ -60,8 +65,10 @@ async def apply_result(
     booking_id = payment.booking_id
     await db.commit()
     if confirmed:
-        from app.modules.booking.tasks import notify_confirmed
+        from app.modules.booking.tasks import notify_confirmed, push_update
         await notify_confirmed(booking_id)
+        await push_update(booking_id, "created")  # the deposit landed: now it's a booking for the business
+        await push_update(booking_id, "assigned")  # and for its staff member (not told while it was unpaid)
     return payment
 
 
@@ -76,12 +83,14 @@ async def _charge_paid(db: AsyncSession, payment: Payment) -> None:
     if booking.payment_status == BookingPaymentStatus.PAID:
         # Settled some other way meanwhile (e.g. cash): the customer paid twice.
         record_refund(booking, fee=0, refund=payment.amount)
+        _tell_refund(db, booking.id, payment.amount, "You were charged twice for this visit")
         logger.error(
             f"Booking {booking.reference} was already paid when M-Pesa charge {payment.mpesa_receipt} "
             f"(KES {payment.amount}) arrived; refund due"
         )
         return
-    await mark_charged(db, booking, reason=f"mpesa:{payment.mpesa_receipt}" if payment.mpesa_receipt else "mpesa")
+    await mark_charged(db, booking, reason=f"mpesa:{payment.mpesa_receipt}" if payment.mpesa_receipt else "mpesa",
+                       tip=payment.tip_amount or 0)
 
 
 async def _deposit_paid(db: AsyncSession, payment: Payment, now: datetime) -> bool:
@@ -113,6 +122,7 @@ async def _deposit_paid(db: AsyncSession, payment: Payment, now: datetime) -> bo
         ))
         from app.modules.booking.bookings import record_refund
         record_refund(booking, fee=0, refund=payment.amount)  # the business refunds it by hand (D10)
+        _tell_refund(db, booking.id, payment.amount, "Your payment arrived after the booking had expired and the time was taken")
         logger.error(
             f"Booking {booking.reference} was paid ({payment.mpesa_receipt}) after its hold expired and the "
             f"slot was taken: the deposit of KES {payment.amount} needs refunding"
@@ -121,6 +131,14 @@ async def _deposit_paid(db: AsyncSession, payment: Payment, now: datetime) -> bo
 
     logger.warning(f"Deposit paid for booking {booking.reference} in status {booking.status}; nothing to change")
     return False
+
+
+def _tell_refund(db: AsyncSession, booking_id, amount: int, why: str) -> None:
+    """The customer is owed money back and the business has to send it (D10): tell both, once this commits."""
+    from app.modules.booking.tasks import push_update
+
+    notify_after_commit(db, lambda: push_update(booking_id, "refund_due", amount=amount, why=why))
+    notify_after_commit(db, lambda: push_update(booking_id, "refund_owed", amount=amount, why=why))
 
 
 async def _still_fits(db: AsyncSession, booking: Booking, now: datetime) -> bool:

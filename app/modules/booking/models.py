@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 from enum import Enum as PyEnum
 from typing import Optional
 
-from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, String, Text, func, text
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import ExcludeConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -90,7 +90,7 @@ class Booking(Base):
 
     # Snapshot at booking time, so the business keeps the details if the account changes.
     customer_name: Mapped[str] = mapped_column(Text, nullable=False)
-    customer_phone: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    customer_phone: Mapped[Optional[str]] = mapped_column(Text, nullable=True, index=True)
     customer_email: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
@@ -112,6 +112,10 @@ class Booking(Base):
     # The assigned staff member's commission on this booking, fixed when it's paid
     # (total x their commission percent then), so later rate changes don't rewrite it.
     staff_commission: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # When the balance was settled (payment_status became paid): the commission's date in the wallet.
+    paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # A tip paid with the checkout charge; it goes to the staff member's wallet, not the business's revenue.
+    tip_amount: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # Set when each reminder SMS is claimed for sending (BK-62), so it goes out once;
     # rescheduling clears them for the new time.
     reminder_24h_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -184,3 +188,28 @@ class BookingEvent(Base):
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
     booking: Mapped["Booking"] = relationship(back_populates="events")
+
+
+class StaffTimeOff(Base):
+    """Time a staff member can't take bookings (S4): a doctor's appointment, a day off. Availability
+    treats it like a booking for that person, so it's never offered or booked over."""
+
+    __tablename__ = "staff_time_off"
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(UUID, primary_key=True, default=uuid4)
+    business_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID, ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False
+    )
+    staff_id: Mapped[uuid_pkg.UUID] = mapped_column(UUID, ForeignKey("staff.id", ondelete="CASCADE"), nullable=False)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    all_day: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_by: Mapped[uuid_pkg.UUID] = mapped_column(UUID, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+    __table_args__ = (
+        # Availability reads a business's time off for a window; the staff app reads one person's.
+        Index("ix_staff_time_off_business_starts", "business_id", "starts_at"),
+        Index("ix_staff_time_off_staff_starts", "staff_id", "starts_at"),
+    )

@@ -24,21 +24,21 @@ Sizes: **S** is up to a day, **M** is 2–3 days, **L** is about a week. Status 
 | BK-31 | Payments table and `POST /bookings/{id}/payments` | M3 | M | BK-22, BK-30 | eslieh | done |
 | BK-32 | M-Pesa callback endpoint | M3 | M | BK-31 | eslieh | done |
 | BK-33 | Reconcile stuck payments | M3 | S | BK-25, BK-31 | eslieh | done |
-| BK-34 | Deposit and receipt on the booking, per-business deposit totals | M3 | S | BK-32 | | todo |
-| BK-35 | Prove payment routing in production | M3 | S | BK-30 | eslieh | in progress |
+| BK-34 | Deposit and receipt on the booking, per-business deposit totals | M3 | S | BK-32 | eslieh | done |
+| BK-35 | Prove payment routing in production | M3 | S | BK-30 | eslieh | done |
 | BK-36 | Payment destinations fit Daraja limits; merge bank lists | M3 | S | — | | todo |
 | BK-40 | Booking confirmation SMS | M4 | S | BK-22 | eslieh | done |
 | BK-41 | Push notification tokens (Expo) | M4 | M | — | eslieh | done |
-| BK-50 | Concurrency test for double-booking | M5 | S | BK-22, BK-05 | | todo |
-| BK-51 | M-Pesa production go-live | M5 | S (weeks of lead time) | BK-01 | | todo |
-| BK-52 | Contract hand-off to the app team | M5 | S | BK-22, BK-31 | | todo |
+| BK-50 | Concurrency test for double-booking | M5 | S | BK-22, BK-05 | eslieh | in review |
+| BK-51 | M-Pesa production go-live | M5 | S (weeks of lead time) | BK-01 | eslieh | done |
+| BK-52 | Contract hand-off to the app team | M5 | S | BK-22, BK-31 | eslieh | in progress |
 | BK-60 | Cancel within policy | Next | M | BK-22 | eslieh | done |
 | BK-61 | Reschedule | Next | M | BK-22, BK-11 | eslieh | done |
 | BK-62 | Reminders 24h and 2h before | Next | M | BK-25, BK-40 | eslieh | done |
 | BK-63 | Owner and front-desk bookings (list, walk-in, on-behalf, status) | Next | L | BK-22 | eslieh | done |
 | BK-64 | No-show marking and fee | Next | S | BK-63 | eslieh | done |
 
-**Start here:** BK-05, BK-21, BK-25, BK-30 and BK-36 have no dependencies and can be picked up now. BK-51 should start on day one because of Safaricom's lead time, and BK-35 follows as soon as it lands: it's the biggest open risk.
+**What's left (2026-10-20):** BK-05 (CI's first green Postgres run, on the next PR to `sandbox`/`main`), BK-50 (merge), BK-01 (sign off D9 now that the Postgres tests pass), BK-36 (check saved destinations; confirm a 13-20 character reference in production), and BK-52's walkthrough with the app team.
 
 ---
 
@@ -85,7 +85,8 @@ The exclusion constraint (D9) can't be tested on SQLite.
 
 Done so far: `test.yml` runs a `[sqlite, postgres]` matrix; `TEST_DATABASE_URL` switches the suite to Postgres (creating `btree_gist` first); `@pytest.mark.postgres_only` skips on SQLite; a guard refuses any test database host other than localhost/127.0.0.1/postgres, because every test drops all tables.
 
-- [ ] CI runs green on Postgres. Not verified yet: no local Postgres was used, and `test.yml` only runs on pushes and PRs to `sandbox`/`main`, so the first such PR is the check. Expect possible fixes for SQLite-vs-Postgres differences (timezones, JSON, ordering).
+- [x] The full suite passes on Postgres 16 (run locally in Docker, 2026-10-20): 649 passed; the 2 failures were tests inserting rows for businesses that don't exist (SQLite doesn't enforce foreign keys), now fixed.
+- [ ] CI runs green on Postgres. Not verified yet in CI itself: no local Postgres was used, and `test.yml` only runs on pushes and PRs to `sandbox`/`main`, so the first such PR is the check. Expect possible fixes for SQLite-vs-Postgres differences (timezones, JSON, ordering).
 
 ## M1: Availability
 
@@ -112,7 +113,7 @@ Done so far: `test.yml` runs a `[sqlite, postgres]` matrix; `TEST_DATABASE_URL` 
 - `transition(booking, to, actor, reason)`, which enforces the diagram in PLAN.md section 4.2 and writes a `booking_events` row.
 
 - [x] An illegal transition raises a clear error; tests cover every allowed and disallowed pair (`tests/test_booking_states.py`).
-- [ ] Overlapping active bookings for one staff member are rejected by the database. The constraint is in migration `009` and the model (Postgres only); its test is written but skips until BK-05 runs the suite on Postgres.
+- [x] Overlapping active bookings for one staff member are rejected by the database (migration `009`; its Postgres-only test passes, 2026-10-20).
 - Also added: a short `reference` per booking (`BK` + 6 characters), usable as the M-Pesa till `AccountReference` and on receipts.
 
 ### BK-21 · Price and deposit calculator
@@ -126,7 +127,7 @@ A pure function: `(services with quantities, policies) -> { total, deposit | Non
 - No deposit gives `confirmed`. A deposit gives `pending_payment` with `expires_at = now + 10 min` (D6).
 - Snapshot the customer's name and phone from their account.
 
-- [ ] Two parallel requests for the same slot give one 201 and one 409. Sequential double-booking is tested; the parallel case needs Postgres (BK-50).
+- [x] Parallel requests for the same slot give one 201 and the rest 409 (`tests/test_booking_concurrency.py`, BK-50).
 - [x] A changed `expectedTotal` returns 409 `price_changed` with the current total.
 - [x] The booking can't be for your own business's staff when you're the owner (400 `own_business`).
 - Also: expired holds in that business are released on the spot before the slot check (so they can't trip the constraint), and times off the slot grid or outside hours return 409 (`tests/test_create_booking.py`).
@@ -183,7 +184,7 @@ A pure function: `(services with quantities, policies) -> { total, deposit | Non
 - Also: the payment row is written before the push (a crash mid-call still leaves a trace) and records the routing used; the booking's `depositPayment` shows the latest attempt; tests blank all M-Pesa settings so they can never send a real push.
 
 ### BK-32 · M-Pesa callback endpoint
-`POST /payments/mpesa/callback/{secret}`: public, but the secret in the path must match.
+`POST /payments/stk/callback/{secret}`: public, but the secret in the path must match.
 
 *Started in BK-30:* the route exists in `app/modules/payments/router.py` and verifies the secret, parses the payload and logs it. What's left is everything below that touches the database.
 
@@ -205,10 +206,12 @@ A pure function: `(services with quantities, policies) -> { total, deposit | Non
 ### BK-34 · Deposit and receipt on the booking, per-business deposit totals
 With payment routing (D1) the money is already in the business's account, so there's nothing to settle. Record what was paid, and where it went, for the owner's view.
 
-- [ ] The booking shows `depositPaid`, the M-Pesa receipt and the destination it was routed to.
-- [ ] Owner earnings (a later phase) can sum deposits per business and date range from `payments`.
+- [x] The booking shows `depositPaid`, and `depositPayment` / `chargePayment` carry the amount, M-Pesa `receipt`, `paidAt` and `destination` `{type, label}` (account numbers shortened to the last 4), from what was recorded on the payment (2026-10-20, `tests/test_payments.py`). Shown on the customer's booking and the owner's appointment.
+- [x] Owner earnings sum deposits per business and date range: `money.depositsCollected` in get-earnings-summary.
 
 ### BK-35 · Prove payment routing in production
+
+Done (confirmed by the team, 2026-10-20), with go-live (BK-51).
 The sandbox doesn't validate `PartyB`, so routing to a till or paybill Trimmy doesn't own is unproven. As soon as production credentials exist (BK-51), push KES 1 to one real third-party till, one paybill and one bank.
 
 - [x] Paybill: a production STK push routed to a third-party paybill succeeded (2026-09-26, `scripts/mpesa_stk.py`).
@@ -216,9 +219,11 @@ The sandbox doesn't validate `PartyB`, so routing to a till or paybill Trimmy do
 - [ ] Ask Safaricom during go-live whether this routing needs special approval on Trimmy's shortcode.
 
 ### BK-36 · Payment destinations fit Daraja limits; merge bank lists
-Daraja caps `AccountReference` at 12 characters, but the server accepts bank and paybill account numbers up to 34 and 50.
+Daraja documents a 12-character cap on `AccountReference`; we allow 20 so longer bank account numbers fit. The server used to accept up to 34 (bank) and 50 (paybill).
 
-- [ ] Payment-destination validation limits `paybillAccountNumber` and `bankAccountNumber` to 12 characters (letters, digits, `-_/.` and spaces, as in the prototype), with a clear message. Check existing saved destinations and list any that no longer pass.
+- [x] Payment-destination validation limits `paybillAccountNumber` and `bankAccountNumber` to 20 characters (paybill: letters, digits, `-_/.` and spaces; bank: 5-20 letters or digits), matching the STK push check.
+- [ ] Check existing saved destinations and list any that no longer pass.
+- [ ] Confirm in production that a 13-20 character account reference is accepted and credited to the right account (not truncated).
 - [ ] Merge the bank lists: the prototype has Bank of Africa, ABC Bank and Bank of Baroda, which `app/modules/business/payment_options.py` doesn't. Verify every shortcode before it goes live.
 
 ## M4: Notifications
@@ -237,18 +242,22 @@ Daraja caps `AccountReference` at 12 characters, but the server accepts bank and
 ## M5: Go-live
 
 ### BK-50 · Concurrency test for double-booking
-- [ ] A Postgres test fires 20 concurrent `POST /bookings` for the same staff and slot: exactly one succeeds and the rest get 409.
-- [ ] The same test with "Any available" and 3 free staff: exactly 3 unassigned bookings succeed, and the 4th gets 409.
+- [x] A Postgres test fires 20 concurrent `POST /bookings` for the same staff and slot: exactly one succeeds and the rest get 409.
+- [x] The same test with "Any available" and 3 free staff: exactly 3 succeed and the rest get 409 (6 requests).
+
+Both in `tests/test_booking_concurrency.py`; each request gets its own session and connection, as real requests do. Passing on Postgres 16 (2026-10-20).
 
 ### BK-51 · M-Pesa production go-live
 Start on day one; Safaricom's approval takes weeks.
+
+Done (confirmed by the team, 2026-10-20): production M-Pesa is live. The checklist below wasn't itemised when it was closed.
 
 - [ ] Go-live application submitted for the paybill decided in D1.
 - [ ] Production passkey and credentials stored as GitHub environment secrets.
 - [ ] Production callback URL (https) registered, and Safaricom's IP ranges allowed at the proxy.
 
 ### BK-52 · Contract hand-off to the app team
-- [ ] `mobile/reference/api/booking.json` updated with PLAN.md section 5, marked `live` per endpoint as they ship.
+- [x] `mobile/reference/api/booking.json` updated with PLAN.md section 5; every endpoint is marked `live` (checked against the routes 2026-10-20, BK-34 fields added).
 - [ ] A walkthrough of the two-step payment and polling with the app team.
 
 ## Next phase

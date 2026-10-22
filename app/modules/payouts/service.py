@@ -4,11 +4,10 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import HTTPException
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auth.models import User
-from app.modules.booking.models import Booking, PaymentStatus as BookingPaymentStatus
 from app.modules.business.models import Business, Staff
 from app.modules.payouts.models import Payout, PayoutStatus
 from app.modules.payouts.schemas import ListPayoutsResponse, PayoutBalanceResponse, PayoutResponse
@@ -52,28 +51,9 @@ class PayoutsService:
     # ─── balance ─────────────────────────────────────────────
 
     async def balance_for(self, staff: Staff) -> PayoutBalanceResponse:
-        earned = (
-            await self.db.execute(
-                select(func.coalesce(func.sum(Booking.staff_commission), 0)).where(
-                    Booking.staff_id == staff.id, Booking.payment_status == BookingPaymentStatus.PAID
-                )
-            )
-        ).scalar_one()
-        totals = dict(
-            (
-                await self.db.execute(
-                    select(Payout.status, func.coalesce(func.sum(Payout.amount), 0))
-                    .where(Payout.staff_id == staff.id, Payout.status.in_([PayoutStatus.PENDING, PayoutStatus.PAID]))
-                    .group_by(Payout.status)
-                )
-            ).all()
-        )
-        pending, paid = int(totals.get(PayoutStatus.PENDING, 0)), int(totals.get(PayoutStatus.PAID, 0))
-        return PayoutBalanceResponse(
-            businessId=staff.business_id, staffId=staff.id, currency="KES", earned=int(earned),
-            pending=pending, paid=paid, available=int(earned) - pending - paid,
-            commissionPercent=staff.commission_percent,
-        )
+        from app.modules.payouts.wallet import WalletService
+
+        return await WalletService(self.db, self.now).balance_for(staff)
 
     async def my_balance(self, user: User, business_id: str) -> PayoutBalanceResponse:
         bid = self._uuid(business_id, "No business found for this id")
@@ -118,6 +98,14 @@ class PayoutsService:
         self.db.add(payout)
         await self.db.commit()
         await self.db.refresh(payout)
+
+        business = await self.db.get(Business, business_id)
+        if business is not None and business.owner_id != user.id:
+            from app.modules.notifications.tasks import notify
+            await notify(
+                business.owner_id, "Payout request", f"{me.name} requested KES {amount:,} from their wallet.",
+                type="payout_requested", payoutId=payout.id, businessId=business_id,
+            )
         return _response(payout)
 
     async def list_for_business(
@@ -141,6 +129,19 @@ class PayoutsService:
                 raise _error(400, "validation_error", "status must be pending, paid or rejected")
             query = query.where(Payout.status == status)
         return ListPayoutsResponse(payouts=[_response(p) for p in (await self.db.execute(query)).scalars()])
+
+    async def get(self, user: User, payout_id: str) -> PayoutResponse:
+        """One payout: for its business's owner, or the staff member who asked. 404 for anyone else."""
+        from app.modules.booking.business_bookings import OWNER
+
+        not_found = _error(404, "not_found", "payoutId does not exist")
+        payout = await self.db.get(Payout, self._uuid(payout_id, "payoutId does not exist"))
+        if payout is None:
+            raise not_found
+        role, me = await self._business_role(user, payout.business_id)
+        if role != OWNER and (me is None or me.id != payout.staff_id):
+            raise not_found
+        return _response(payout)
 
     async def respond(self, user: User, payout_id: str, action: str, rejection_reason: Optional[str]) -> PayoutResponse:
         """Owner only. approve = "I've paid them myself"; no money moves through Trimmy."""

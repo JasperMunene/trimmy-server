@@ -41,8 +41,8 @@ _TOKEN_SAFETY_SECONDS = 60
 _STILL_PROCESSING = "500.001.1001"
 
 _SHORTCODE_RE = re.compile(r"^\d{5,7}$")
-# Daraja caps AccountReference at 12 characters.
-_ACCOUNT_REF_RE = re.compile(r"^[A-Za-z0-9\-_/. ]{1,12}$")
+# Account references: up to 20 characters (Daraja documents 12; we allow 20, see BK-36).
+_ACCOUNT_REF_RE = re.compile(r"^[A-Za-z0-9\-_/. ]{1,20}$")
 _SAFARICOM_PHONE_RE = re.compile(r"^254[17]\d{8}$")
 
 
@@ -119,7 +119,7 @@ def _account_reference(value: Optional[str], label: str) -> str:
     if not _ACCOUNT_REF_RE.match(value):
         raise MpesaError(
             "invalid_account_reference",
-            f"The {label} must be 1-12 characters (letters, digits, -_/. and spaces) for M-Pesa",
+            f"The {label} must be 1-20 characters (letters, digits, -_/. and spaces) for M-Pesa",
         )
     return value
 

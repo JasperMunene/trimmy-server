@@ -37,6 +37,7 @@ from app.modules.business.models import Business, Staff
 
 OWNER, FRONT_DESK, STAFF = "owner", "front_desk", "staff"
 MAX_RANGE_DAYS = 62
+CUSTOMER_HISTORY_LIMIT = 200
 WALK_IN_NAME = "Walk-in customer"
 
 
@@ -86,6 +87,9 @@ class BusinessBookingsService:
         staff_id: Optional[uuid_pkg.UUID],
         unassigned: bool,
         refund: Optional[str] = None,
+        customer_id: Optional[uuid_pkg.UUID] = None,
+        phone: Optional[str] = None,
+        limit: Optional[int] = None,
     ) -> BusinessBookingsResponse:
         try:
             bid = uuid_pkg.UUID(str(business_id))
@@ -99,8 +103,26 @@ class BusinessBookingsService:
             raise _error(400, "validation_error", "refund must be due or refunded")
         if day:
             start = end = day
-        # Refunds owed are listed whatever their date; everything else needs a range.
-        if (not start or not end) and refund is None:
+        # One customer's history (Customer Detail): their bookings by phone, or by email for a
+        # customer saved without one. Newest first, any date.
+        history = customer_id is not None or bool(phone)
+        match = None
+        if history:
+            from app.modules.customers.models import BusinessCustomer
+            from app.modules.customers.service import clean_phone
+
+            if customer_id is not None:
+                saved = await self.db.get(BusinessCustomer, customer_id)
+                if saved is None or saved.business_id != bid:
+                    raise _error(404, "not_found", "No customer found for this id")
+                if saved.phone:
+                    match = Booking.customer_phone == saved.phone
+                elif saved.email:
+                    match = Booking.customer_email == saved.email
+            else:
+                match = Booking.customer_phone == clean_phone(phone)
+        # Refunds owed and a customer's history are listed whatever their date; everything else needs a range.
+        if (not start or not end) and refund is None and not history:
             raise _error(400, "validation_error", "Pass date, or from and to")
         if start and end and (end < start or (end - start).days >= MAX_RANGE_DAYS):
             raise _error(400, "validation_error", f"from..to must be 1 to {MAX_RANGE_DAYS} days")
@@ -133,6 +155,11 @@ class BusinessBookingsService:
             if not set(statuses) <= {s.value for s in BookingStatus}:
                 raise _error(400, "validation_error", f"Unknown status in {status!r}")
             query = query.where(Booking.status.in_(statuses))
+        if history:
+            if match is None:
+                return BusinessBookingsResponse(bookings=[])
+            query = query.where(match).order_by(None).order_by(Booking.starts_at.desc(), Booking.id)
+            query = query.limit(min(limit or CUSTOMER_HISTORY_LIMIT, CUSTOMER_HISTORY_LIMIT))
         rows = (await self.db.execute(query)).scalars().all()
         return BusinessBookingsResponse(bookings=await self.bookings.to_responses(rows))
 
@@ -188,12 +215,16 @@ class BusinessBookingsService:
             await self.db.rollback()
             raise _error(409, "slot_unavailable", "This time is no longer available")
 
+        from app.modules.booking.customer_match import match_account
         from app.modules.customers.service import clean_phone, remember_customer
 
         phone = clean_phone(data.customer_phone)
         booking = Booking(
             id=uuid_pkg.uuid4(),
             business_id=ctx.business.id,
+            # A Trimmy account with this proven phone / email: the booking shows in their app and
+            # they get its notifications (customer_match.py).
+            customer_id=await match_account(self.db, phone, data.customer_email),
             staff_id=data.staff_id,
             source=BookingSource.WALK_IN,  # business-recorded, per fulfillment.json
             starts_at=start.astimezone(timezone.utc),
@@ -226,10 +257,12 @@ class BusinessBookingsService:
             await self.db.rollback()
             raise _error(409, "slot_unavailable", "This time is no longer available")
         from app.modules.booking import tasks as booking_tasks
-        if booking.status == BookingStatus.CONFIRMED and booking.customer_phone:
-            await booking_tasks.notify_confirmed(booking.id)  # on-behalf bookings; walk-ins are already here
+        if booking.status == BookingStatus.CONFIRMED and (booking.customer_phone or booking.customer_id or booking.customer_email):
+            # On-behalf bookings: SMS if there's a phone; in the app and by email as their settings
+            # allow when it's their account; email for a guest. Walk-ins are already here.
+            await booking_tasks.notify_confirmed(booking.id)
         if booking.staff_id:
-            await booking_tasks.push_update(booking.id, "assigned")
+            await booking_tasks.push_update(booking.id, "assigned", actor_id=user.id)
         return await self.bookings.get_response(booking.id)
 
     # ─── status changes ──────────────────────────────────────
@@ -265,9 +298,15 @@ class BusinessBookingsService:
         elif data.status == BookingStatus.NO_SHOW:
             await self._apply_no_show_fee(booking)
         await self.db.commit()
+        from app.modules.booking.tasks import push_update
         if data.status == BookingStatus.CANCELLED:
-            from app.modules.booking.tasks import push_update
             await push_update(booking.id, "cancelled_by_business")
+            await push_update(booking.id, "cancelled_for_staff", actor_id=user.id)
+        elif data.status == BookingStatus.NO_SHOW:
+            await push_update(booking.id, "no_show")
+        elif data.status == BookingStatus.COMPLETED and booking.payment_status == "paid":
+            # Unpaid: the receipt goes out when it's charged (payments/service.py mark_charged).
+            await push_update(booking.id, "completed")
         return await self.bookings.get_response(booking.id)
 
     async def _apply_no_show_fee(self, booking: Booking) -> None:
@@ -314,4 +353,6 @@ class BusinessBookingsService:
             reason=f"refunded {booking.refund_reference or ''}".strip()[:100],
         ))
         await self.db.commit()
+        from app.modules.booking.tasks import push_update
+        await push_update(booking.id, "refunded")
         return await self.bookings.get_response(booking.id)

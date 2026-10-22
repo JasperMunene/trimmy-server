@@ -1,12 +1,14 @@
 """Google sign-in (OAuth 2.0 authorization-code flow, server side).
 
-1. App:    GET  /auth/google/url?platform=web|mobile[&code_challenge=...]  -> { url }
+1. App:    GET  /auth/google/url?platform=web|mobile[&code_challenge=...][&redirect_uri=...]  -> { url }
+           A web app can name where to come back to (redirect_uri); it must be on
+           GOOGLE_WEB_REDIRECT_ALLOWLIST, and travels in the signed state.
 2. App opens `url`; the user signs in with Google.
 3. Google: GET  /auth/google/authorized?code=...&state=...
            Server exchanges the code with Google, finds/links/creates the user,
            then redirects to the app with a one-time exchange code:
              mobile -> GOOGLE_MOBILE_REDIRECT_URL?code=...   (trimmy://auth/google)
-             web    -> GOOGLE_WEB_REDIRECT_URL?code=...
+             web    -> the requested redirect_uri, else GOOGLE_WEB_REDIRECT_URL, ?code=...
            or, on failure, ?error=<code>.
 4. App:    POST /auth/google/exchange { code[, code_verifier] } -> { user, tokens }
 
@@ -61,7 +63,20 @@ def require_configured() -> None:
         )
 
 
-def build_auth_url(platform: str, code_challenge: Optional[str]) -> str:
+def allowed_web_redirect(redirect_uri: str) -> bool:
+    """Exact matches only: a prefix or pattern could let a code reach another site."""
+    allowed = set(settings.GOOGLE_WEB_REDIRECT_ALLOWLIST)
+    if settings.GOOGLE_WEB_REDIRECT_URL:
+        allowed.add(settings.GOOGLE_WEB_REDIRECT_URL)
+    return redirect_uri in allowed
+
+
+def build_auth_url(platform: str, code_challenge: Optional[str], redirect_uri: Optional[str] = None) -> str:
+    if redirect_uri is not None and (platform != "web" or not allowed_web_redirect(redirect_uri)):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_redirect", "message": "This app isn't allowed to receive Google sign-ins"},
+        )
     nonce = secrets.token_urlsafe(16)
     state = jwt.encode(
         {
@@ -69,6 +84,7 @@ def build_auth_url(platform: str, code_challenge: Optional[str]) -> str:
             "platform": platform,
             "nonce": nonce,
             "cc": code_challenge,
+            "ru": redirect_uri,
             "exp": datetime.now(timezone.utc) + STATE_TTL,
         },
         settings.SECRET_KEY,
@@ -99,9 +115,11 @@ def decode_state(state: Optional[str]) -> Optional[dict]:
     return payload
 
 
-def client_redirect_url(platform: str, **params: str) -> str:
+def client_redirect_url(platform: str, redirect_uri: Optional[str] = None, **params: str) -> str:
     if platform == "mobile":
         base = settings.GOOGLE_MOBILE_REDIRECT_URL
+    elif redirect_uri and allowed_web_redirect(redirect_uri):  # re-checked: the allow-list may have changed
+        base = redirect_uri
     else:
         base = settings.GOOGLE_WEB_REDIRECT_URL or f"{settings.CLIENT_URL.rstrip('/')}/auth/google"
     sep = "&" if "?" in base else "?"
@@ -218,6 +236,12 @@ class GoogleAuthService:
         await self.db.refresh(user)
         return AuthResponse(user=UserResponse.model_validate(user), tokens=tokens)
 
+    async def _claim(self, user: User) -> None:
+        """Google proved the email: bookings a business made for it become theirs (customer_match.py)."""
+        from app.modules.booking.customer_match import claim_bookings
+
+        await claim_bookings(self.db, user)
+
     async def _find_or_link_user(self, claims: dict) -> User:
         sub, email = str(claims["sub"]), claims["email"]
         now = datetime.now(timezone.utc)
@@ -241,6 +265,7 @@ class GoogleAuthService:
                 user.verified = True
                 user.verified_at = now
             user.google_sub = sub
+            await self._claim(user)
             return user
 
         user = User(
@@ -254,4 +279,5 @@ class GoogleAuthService:
         )
         self.db.add(user)
         await self.db.flush()
+        await self._claim(user)
         return user

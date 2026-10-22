@@ -74,12 +74,15 @@ async def list_business_bookings(
     staff_id: Optional[uuid_pkg.UUID] = Query(None, alias="staffId"),
     unassigned: bool = Query(False, description="Only bookings with no staff assigned"),
     refund: Optional[str] = Query(None, description="due | refunded; date range optional with this"),
+    customer_id: Optional[uuid_pkg.UUID] = Query(None, alias="customerId", description="One customer's history (list-customers id); newest first, no date needed"),
+    phone: Optional[str] = Query(None, description="Like customerId, by phone in any format"),
+    limit: Optional[int] = Query(None, ge=1, le=200, description="With customerId / phone: at most this many (default 200)"),
     current_user: User = Depends(get_current_verified_user),
     db: AsyncSession = Depends(get_db),
 ):
     """The business's bookings, soonest first. Owner and front desk see all; staff see their own."""
     return await BusinessBookingsService(db).list(
-        current_user, business_id, day, start, end, status_filter, staff_id, unassigned, refund
+        current_user, business_id, day, start, end, status_filter, staff_id, unassigned, refund, customer_id, phone, limit
     )
 
 

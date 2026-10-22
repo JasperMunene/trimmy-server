@@ -195,9 +195,13 @@ async def google_auth_url(
         pattern=r"^[A-Za-z0-9_-]{43}$",
         description="base64url(sha256(code_verifier)); send code_verifier to /google/exchange",
     ),
+    redirect_uri: Optional[str] = Query(
+        None, max_length=300,
+        description="web only: where to send the browser back to; must be on GOOGLE_WEB_REDIRECT_ALLOWLIST",
+    ),
 ):
     google.require_configured()
-    return GoogleAuthUrlResponse(url=google.build_auth_url(platform, code_challenge))
+    return GoogleAuthUrlResponse(url=google.build_auth_url(platform, code_challenge, redirect_uri))
 
 
 @router.get("/google/authorized", include_in_schema=False)
@@ -217,18 +221,19 @@ async def google_authorized(
             detail={"error": "invalid_state", "message": "Sign-in link is invalid or expired. Please try again."},
         )
     platform = payload["platform"]
+    back = payload.get("ru")  # where a web app asked to come back to (checked when the URL was made)
 
     if error or not code:
         # e.g. error=access_denied when the user cancels on Google's screen.
-        return RedirectResponse(google.client_redirect_url(platform, error=error or "missing_code"), status_code=302)
+        return RedirectResponse(google.client_redirect_url(platform, back, error=error or "missing_code"), status_code=302)
 
     try:
         exchange_code = await GoogleAuthService(db).complete_sign_in(code, payload)
     except GoogleAuthError as e:
         logger.warning(f"Google sign-in failed: {e.code}: {e}")
-        return RedirectResponse(google.client_redirect_url(platform, error=e.code), status_code=302)
+        return RedirectResponse(google.client_redirect_url(platform, back, error=e.code), status_code=302)
 
-    return RedirectResponse(google.client_redirect_url(platform, code=exchange_code), status_code=302)
+    return RedirectResponse(google.client_redirect_url(platform, back, code=exchange_code), status_code=302)
 
 
 @router.post("/google/exchange", response_model=AuthResponse)

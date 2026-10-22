@@ -4,9 +4,10 @@ import uuid as uuid_pkg
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import update
+from sqlalchemy import or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.workers.registry import PermanentError, periodic, task
 
 logger = logging.getLogger(__name__)
@@ -72,8 +73,14 @@ async def send_booking_confirmation(booking_id: str, db: AsyncSession) -> None:
     await db.commit()
     if claimed.rowcount == 0:
         return  # already sent, no longer confirmed, or no phone to text
+    if not settings.NOTIFY_SMS_ENABLED:
+        return
 
     booking = (await db.execute(select(Booking).where(Booking.id == bid).options(selectinload(Booking.lines)))).scalar_one()
+    if booking.customer_id is not None:
+        from app.modules.notifications.preferences import prefs_for
+        if not (await prefs_for(db, [booking.customer_id]))[booking.customer_id].allows("booking_confirmed", "sms"):
+            return  # they turned off booking texts
     business = await db.get(Business, booking.business_id)
     staff = await db.get(Staff, booking.staff_id) if booking.staff_id else None
     starts = booking.starts_at if booking.starts_at.tzinfo else booking.starts_at.replace(tzinfo=timezone.utc)
@@ -170,7 +177,8 @@ async def scan_reminders_job(db: AsyncSession) -> None:
             select(Booking.id, Booking.starts_at, Booking.created_at, Booking.reminder_24h_sent_at, Booking.reminder_2h_sent_at)
             .where(
                 Booking.status == BookingStatus.CONFIRMED,
-                Booking.customer_phone.is_not(None),
+                # Someone to remind: a phone to text, or an account (in-app, push, email).
+                or_(Booking.customer_phone.is_not(None), Booking.customer_id.is_not(None)),
                 Booking.starts_at > now,
                 Booking.starts_at <= now + DAY_BEFORE,
                 or_(Booking.reminder_24h_sent_at.is_(None), Booking.reminder_2h_sent_at.is_(None)),
@@ -216,7 +224,7 @@ async def send_booking_reminder(booking_id: str, kind: str, db: AsyncSession) ->
     claimed = await db.execute(
         update(Booking)
         .where(Booking.id == bid, column.is_(None), Booking.status == BookingStatus.CONFIRMED,
-               Booking.customer_phone.is_not(None), Booking.starts_at > now)
+               or_(Booking.customer_phone.is_not(None), Booking.customer_id.is_not(None)), Booking.starts_at > now)
         .values({column.key: now})
     )
     await db.commit()
@@ -228,9 +236,9 @@ async def send_booking_reminder(booking_id: str, kind: str, db: AsyncSession) ->
     prefs = await reminder_prefs(db, booking.customer_id)
     if not prefs.wants(kind):
         return
-    if not prefs.sms:
-        if prefs.push:
-            await push_update(bid, f"reminder_{kind}")
+    if not (prefs.sms and booking.customer_phone):
+        # In the app (and push / email, as their settings say) only.
+        await push_update(bid, f"reminder_{kind}")
         return
     business = await db.get(Business, booking.business_id)
     staff = await db.get(Staff, booking.staff_id) if booking.staff_id else None
@@ -247,68 +255,102 @@ async def send_booking_reminder(booking_id: str, kind: str, db: AsyncSession) ->
         await db.execute(update(Booking).where(Booking.id == bid).values({column.key: None}))
         await db.commit()
         raise
-    if prefs.push:
-        await push_update(bid, f"reminder_{kind}")
+    await push_update(bid, f"reminder_{kind}")  # the inbox, plus push / email per their settings
 
 
-# ─── Push notifications about a booking (BK-41) ──────────────
+# ─── Notifications about a booking (BK-41) ───────────────────
+# Inbox + live stream always; push / SMS / email per channel switches and each person's settings
+# (notifications/dispatch.py). What each kind says is in booking/messages.py.
 
-PUSH_KINDS = ("confirmed", "cancelled_by_business", "reminder_24h", "reminder_2h", "assigned")
+CUSTOMER_KINDS = (
+    "confirmed", "cancelled_by_business", "rescheduled_by_business", "payment_failed", "hold_expired",
+    "refund_due", "refunded", "no_show", "completed", "reminder_24h", "reminder_2h",
+)
+STAFF_KINDS = ("assigned", "cancelled_for_staff")  # the assigned staff member
+DESK_KINDS = ("created", "cancelled_by_customer", "rescheduled_by_customer", "refund_owed")  # owner + front desk
+PUSH_KINDS = CUSTOMER_KINDS + STAFF_KINDS + DESK_KINDS
+# Things that happen to a booking once: a deterministic key, so two code paths reporting the same
+# event (e.g. completed by the status stepper and by the charge) notify once.
+ONCE_KINDS = ("hold_expired", "refunded", "no_show", "completed")
+# Customers without an account (walk-ins, on-behalf bookings) can still get these by SMS/email.
+GUEST_KINDS = ("confirmed", "cancelled_by_business", "rescheduled_by_business", "refund_due", "refunded", "no_show", "completed")
+
+
+async def desk_user_ids(db: AsyncSession, business_id: uuid_pkg.UUID) -> list[uuid_pkg.UUID]:
+    """The owner and every front desk member with an account: whoever runs the bookings."""
+    from sqlalchemy import select
+
+    from app.modules.business.models import Business, Staff
+
+    business = await db.get(Business, business_id)
+    front_desk = (await db.execute(
+        select(Staff.user_id).where(Staff.business_id == business_id, Staff.role == "front_desk",
+                                    Staff.user_id.is_not(None))
+    )).scalars().all()
+    return ([business.owner_id] if business else []) + list(front_desk)
 
 
 @task("booking.push_update", queue="default", max_retries=3)
-async def push_booking_update(booking_id: str, kind: str, db: AsyncSession) -> None:
-    """Push one booking event to the right person: the customer, or for "assigned" the staff member."""
-    from sqlalchemy import delete, select
-    from sqlalchemy.orm import selectinload
-    from zoneinfo import ZoneInfo
-
-    from app.modules.booking.models import Booking
-    from app.modules.business.models import Business, Staff
-    from app.modules.notifications.models import PushToken
-    from app.modules.notifications.push import message, send_expo
+async def push_booking_update(
+    booking_id: str, kind: str, db: AsyncSession, actor_id: Optional[str] = None, event_key: Optional[str] = None,
+    extra: Optional[dict] = None,
+) -> None:
+    """Tell the right people about one booking event. `actor_id` (whoever caused it) is left out."""
+    from app.modules.booking.messages import business_message, customer_message, load_context
+    from app.modules.business.models import Staff
+    from app.modules.notifications.dispatch import deliver, notify_contact
 
     if kind not in PUSH_KINDS:
         raise PermanentError(f"Unknown push kind {kind!r}")
-    booking = (
-        await db.execute(select(Booking).where(Booking.id == uuid_pkg.UUID(booking_id)).options(selectinload(Booking.lines)))
-    ).scalar_one_or_none()
-    if booking is None:
+    ctx = await load_context(db, uuid_pkg.UUID(booking_id))
+    if ctx is None:
         return
-    business = await db.get(Business, booking.business_id)
-    staff = await db.get(Staff, booking.staff_id) if booking.staff_id else None
-    tz = ZoneInfo(business.timezone if business else "Africa/Nairobi")
-    starts = (booking.starts_at if booking.starts_at.tzinfo else booking.starts_at.replace(tzinfo=timezone.utc)).astimezone(tz)
-    when = starts.strftime("%a %-d %b %H:%M")
-    what = _what([line.name for line in booking.lines])
-    name = business.name if business else "your salon"
+    booking, extra = ctx.booking, extra or {}
 
-    recipient = booking.customer_id
-    if kind == "confirmed":
-        title, body = "Booking confirmed", f"{name}: {what}, {when}. Ref {booking.reference}."
-    elif kind == "cancelled_by_business":
-        title, body = "Booking cancelled", f"{name} cancelled your {what} on {when}."
-    elif kind == "reminder_24h":
-        title, body = "See you tomorrow", f"{what} at {name}, {when}."
-    elif kind == "reminder_2h":
-        title, body = "Coming up soon", f"{what} at {name} at {starts.strftime('%H:%M')}."
-    else:  # assigned: tell the staff member
-        recipient = staff.user_id if staff else None
-        title, body = "New booking", f"{what} with {booking.customer_name}, {when}."
-    if recipient is None:
-        return
+    if kind in CUSTOMER_KINDS:
+        message = customer_message(kind, ctx, extra)
+        recipients: list = [booking.customer_id]
+    else:
+        message = business_message(kind, ctx, extra)
+        if kind in STAFF_KINDS:
+            staff = await db.get(Staff, booking.staff_id) if booking.staff_id else None
+            recipients = [staff.user_id if staff else None]
+        else:
+            recipients = await desk_user_ids(db, booking.business_id)
+            if kind in ("cancelled_by_customer", "rescheduled_by_customer") and booking.staff_id:
+                staff = await db.get(Staff, booking.staff_id)
+                recipients.append(staff.user_id if staff else None)
+    if actor_id:
+        recipients = [r for r in recipients if str(r) != actor_id]
 
-    tokens = (await db.execute(select(PushToken.token).where(PushToken.user_id == recipient))).scalars().all()
-    data = {"type": f"booking_{kind}", "bookingId": str(booking.id), "businessId": str(booking.business_id)}
-    dead = await send_expo([message(t, title, body, data) for t in tokens])
-    if dead:
-        await db.execute(delete(PushToken).where(PushToken.token.in_(dead)))
-        await db.commit()
+    # Read before deliver() commits (which expires the ORM rows).
+    guest = (booking.customer_phone, booking.customer_email) if booking.customer_id is None else None
+    data = {"bookingId": str(booking.id), "businessId": str(booking.business_id)}
+    key = event_key or (f"booking:{booking.id}:{kind}" if kind in ONCE_KINDS
+                        else f"booking:{booking.id}:{kind}:{uuid_pkg.uuid4().hex[:12]}")
+    await deliver(db, recipients, type=f"booking_{kind}", title=message.title, body=message.body, data=data,
+                  event_key=key, sms=message.sms, email=message.email)
+
+    if kind in GUEST_KINDS and guest is not None and (message.sms or message.email):
+        # No account: no inbox or settings, so the booking's own contact details. The confirmation
+        # SMS has its own once-only path (send_booking_confirmation).
+        await notify_contact(
+            phone=guest[0] if message.sms else None, email=guest[1],
+            sms=message.sms, subject=(message.email or {}).get("subject"), html_body=(message.email or {}).get("html"),
+        )
 
 
-async def push_update(booking_id: uuid_pkg.UUID, kind: str) -> None:
-    """Queue a booking push; never fails the caller."""
+async def push_update(
+    booking_id: uuid_pkg.UUID, kind: str, actor_id: Optional[uuid_pkg.UUID] = None, **extra
+) -> None:
+    """Queue a booking notification; never fails the caller. `extra` is for the message
+    (e.g. old_when on a reschedule)."""
     try:
-        await push_booking_update.enqueue(booking_id=str(booking_id), kind=kind)
+        key = (f"booking:{booking_id}:{kind}" if kind in ONCE_KINDS
+               else f"booking:{booking_id}:{kind}:{uuid_pkg.uuid4().hex[:12]}")
+        await push_booking_update.enqueue(
+            booking_id=str(booking_id), kind=kind, actor_id=str(actor_id) if actor_id else None,
+            event_key=key, extra={k: str(v) for k, v in extra.items() if v is not None} or None,
+        )
     except Exception as e:
-        logger.error(f"Could not queue {kind} push for booking {booking_id}: {e}")
+        logger.error(f"Could not queue {kind} notification for booking {booking_id}: {e}")
