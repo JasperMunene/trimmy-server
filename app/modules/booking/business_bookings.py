@@ -6,7 +6,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -22,14 +22,17 @@ from app.modules.booking.models import (
     BookingSource,
     BookingStatus,
     RefundStatus,
+    Visit,
 )
 from app.modules.booking.pricing import Line, PricingError, quote_booking
 from app.modules.booking.schemas import (
+    AddServiceRequest,
     BookingResponse,
     BusinessBookingsResponse,
     OwnerBookingRequest,
     ScheduledBookingRequest,
     UpdateBookingStatusRequest,
+    VisitResponse,
 )
 from app.modules.booking.service import AvailabilityService, _aware
 from app.modules.booking.states import InvalidTransition, record_created, transition
@@ -65,7 +68,8 @@ class BusinessBookingsService:
             return OWNER, staff
         if staff is None:
             return None, None
-        return (FRONT_DESK if staff.role == "front_desk" else STAFF), staff
+        # Front desk access (desk-only, or staff who also run the desk) manages the business's bookings.
+        return (FRONT_DESK if staff.role == "front_desk" or staff.front_desk_access else STAFF), staff
 
     async def _require_manager(self, user: User, business_id: uuid_pkg.UUID) -> None:
         role, _ = await self._role(user, business_id)
@@ -172,7 +176,12 @@ class BusinessBookingsService:
     async def create_scheduled(self, user: User, data: ScheduledBookingRequest) -> BookingResponse:
         return await self._create(user, data, starts_at=(data.date, data.time))
 
-    async def _create(self, user: User, data: OwnerBookingRequest, starts_at: Optional[tuple]) -> BookingResponse:
+    async def _create(
+        self, user: User, data: OwnerBookingRequest, starts_at: Optional[tuple], *, visit_source: Optional[Booking] = None,
+    ) -> BookingResponse:
+        """starts_at None = now (a walk-in, in progress), else (date, "HH:MM") confirmed. With
+        visit_source, the new booking joins that booking's visit (made on first use): same customer,
+        no confirmation message (they're already here)."""
         await self._require_manager(user, data.business_id)
         requested = {line.service_id: line.quantity for line in data.services}
         if len(requested) != len(data.services):
@@ -205,6 +214,18 @@ class BusinessBookingsService:
         end = start + timedelta(minutes=quote.duration_minutes)
 
         await _lock_business_day(self.db, ctx.business.id, start.date())
+        visit_id = None
+        if visit_source is not None:
+            # The source row, locked: two services added at once join one visit.
+            visit_id = (
+                await self.db.execute(select(Booking.visit_id).where(Booking.id == visit_source.id).with_for_update())
+            ).scalar_one()
+            if visit_id is None:
+                visit = Visit(id=uuid_pkg.uuid4(), business_id=ctx.business.id, created_by=user.id)
+                self.db.add(visit)
+                await self.db.flush()
+                visit_id = visit.id
+                await self.db.execute(update(Booking).where(Booking.id == visit_source.id).values(visit_id=visit_id))
         await expire_holds(self.db, self.now, ctx.business.id)
         await self.db.flush()
         others = await slots.existing_bookings(ctx, start - timedelta(days=1), end + timedelta(days=1))
@@ -224,8 +245,12 @@ class BusinessBookingsService:
             business_id=ctx.business.id,
             # A Trimmy account with this proven phone / email: the booking shows in their app and
             # they get its notifications (customer_match.py).
-            customer_id=await match_account(self.db, phone, data.customer_email),
+            customer_id=(
+                visit_source.customer_id if visit_source is not None
+                else await match_account(self.db, phone, data.customer_email)
+            ),
             staff_id=data.staff_id,
+            visit_id=visit_id,
             source=BookingSource.WALK_IN,  # business-recorded, per fulfillment.json
             starts_at=start.astimezone(timezone.utc),
             ends_at=end.astimezone(timezone.utc),
@@ -245,10 +270,12 @@ class BusinessBookingsService:
                 service_id=sid, position=position, name=service.name,
                 duration_minutes=service.duration_minutes, price_amount=service.price_amount, quantity=qty,
             ))
-        await remember_customer(self.db, ctx.business.id, booking.customer_name, phone, booking.customer_email)
+        if visit_source is None:
+            await remember_customer(self.db, ctx.business.id, booking.customer_name, phone, booking.customer_email)
         record_created(
             booking, BookingStatus.IN_PROGRESS if starts_at is None else BookingStatus.CONFIRMED,
-            actor_id=user.id, reason="walk_in" if starts_at is None else "scheduled_by_business",
+            actor_id=user.id,
+            reason="visit_add" if visit_source is not None else "walk_in" if starts_at is None else "scheduled_by_business",
         )
         self.db.add(booking)
         try:
@@ -257,13 +284,94 @@ class BusinessBookingsService:
             await self.db.rollback()
             raise _error(409, "slot_unavailable", "This time is no longer available")
         from app.modules.booking import tasks as booking_tasks
-        if booking.status == BookingStatus.CONFIRMED and (booking.customer_phone or booking.customer_id or booking.customer_email):
+        if visit_source is None and booking.status == BookingStatus.CONFIRMED and (
+            booking.customer_phone or booking.customer_id or booking.customer_email
+        ):
             # On-behalf bookings: SMS if there's a phone; in the app and by email as their settings
             # allow when it's their account; email for a guest. Walk-ins are already here.
             await booking_tasks.notify_confirmed(booking.id)
         if booking.staff_id:
             await booking_tasks.push_update(booking.id, "assigned", actor_id=user.id)
         return await self.bookings.get_response(booking.id)
+
+    # ─── visits: another service, maybe by someone else ──────
+
+    async def add_service(self, user: User, booking_id: str, data: AddServiceRequest) -> VisitResponse:
+        """A customer having one thing done wants another (hair, now nails): a booking for it,
+        with whoever does it, in the same visit so it's checked out and tipped together."""
+        source = await self._booking_or_404(booking_id)
+        business_id = source.business_id  # read now: a failed insert rolls back and expires `source`
+        await self._require_manager(user, business_id)
+        if source.status not in (BookingStatus.CONFIRMED, BookingStatus.IN_PROGRESS, BookingStatus.COMPLETED):
+            raise _error(409, "invalid_source_status", "Services can only be added to a booked, started or finished visit")
+
+        request = OwnerBookingRequest(
+            businessId=source.business_id, customerName=source.customer_name, customerPhone=source.customer_phone,
+            customerEmail=source.customer_email, services=data.services, staffId=data.staff_id, notes=data.notes,
+        )
+        tz = ZoneInfo((await self.db.get(Business, business_id)).timezone)
+        if data.start == "now":
+            starts_at = None
+        else:
+            if data.start == "at":
+                if not data.time:
+                    raise _error(400, "validation_error", "time is required when start is at")
+                local = datetime.combine(self.now.astimezone(tz).date(), time(*map(int, data.time.split(":"))), tz)
+            else:
+                # Right after the booking it's added to (or now, if that's already over).
+                local = max(_aware(source.ends_at), self.now).astimezone(tz)
+            # Whole minutes, never in the past.
+            if local.second or local.microsecond:
+                local = local.replace(second=0, microsecond=0) + timedelta(minutes=1)
+            starts_at = (local.date(), local.strftime("%H:%M"))
+        try:
+            created = await self._create(user, request, starts_at, visit_source=source)
+        except HTTPException as e:
+            if e.status_code == 409 and isinstance(e.detail, dict) and e.detail.get("error") == "slot_unavailable":
+                next_free = await self._next_free(request, business_id, tz)
+                raise HTTPException(status_code=409, detail={
+                    **e.detail,
+                    "message": "They're busy then" + (f"; free from {next_free}" if next_free else " for the rest of today"),
+                    "nextFreeAt": next_free,
+                })
+            raise
+        from app.modules.booking.visits import VisitsService
+        return await VisitsService(self.db, self.now).get(user, str(created.visit_id))
+
+    async def _next_free(self, data: OwnerBookingRequest, business_id: uuid_pkg.UUID, tz: ZoneInfo) -> Optional[str]:
+        """The first time today (HH:MM, every 5 minutes) this person can fit these services."""
+        requested = {line.service_id: line.quantity for line in data.services}
+        slots = AvailabilityService(self.db, self.now)
+        ctx = await slots.context(str(business_id), list(requested), data.staff_id, for_existing_booking=True)
+        minutes = sum(ctx.services[sid].duration_minutes * qty for sid, qty in requested.items())
+        today = self.now.astimezone(tz).date()
+        window = availability.opening_window(
+            today, ctx.business.working_hours.weekly_hours if ctx.business.working_hours else None, tz
+        )
+        if window is None:
+            return None
+        start = max(self.now.astimezone(tz), window[0]).replace(second=0, microsecond=0)
+        start += timedelta(minutes=(5 - start.minute % 5) % 5)
+        others = await slots.existing_bookings(ctx, start - timedelta(days=1), window[1] + timedelta(days=1))
+        while start + timedelta(minutes=minutes) <= window[1]:
+            end = start + timedelta(minutes=minutes)
+            if availability.booking_fits(
+                start=start, end=end, staff_id=data.staff_id, staff=ctx.staff, bookings=others,
+                service_ids=ctx.service_ids, settings=ctx.settings, now=self.now,
+            ):
+                return start.strftime("%H:%M")
+            start += timedelta(minutes=5)
+        return None
+
+    async def _booking_or_404(self, booking_id: str) -> Booking:
+        try:
+            bid = uuid_pkg.UUID(str(booking_id))
+        except ValueError:
+            raise _error(404, "not_found", "bookingId does not exist")
+        booking = await self.db.get(Booking, bid)
+        if booking is None:
+            raise _error(404, "not_found", "bookingId does not exist")
+        return booking
 
     # ─── status changes ──────────────────────────────────────
 

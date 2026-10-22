@@ -14,7 +14,7 @@ from app.modules.booking.models import Booking
 from app.modules.business.models import Business, Service, Staff
 from app.modules.earnings import summary as agg
 from app.modules.earnings.schemas import EarningsSummaryResponse
-from app.modules.payments.models import Payment, PaymentKind, PaymentStatus
+from app.modules.payments.models import PaymentKind
 
 MAX_RANGE_DAYS = 366
 
@@ -40,7 +40,7 @@ class EarningsService:
         staff_id: Optional[uuid_pkg.UUID],
         transactions_limit: Optional[int],
     ) -> EarningsSummaryResponse:
-        from app.modules.booking.business_bookings import OWNER, STAFF, BusinessBookingsService
+        from app.modules.booking.business_bookings import OWNER, BusinessBookingsService
 
         try:
             bid = uuid_pkg.UUID(str(business_id))
@@ -49,13 +49,14 @@ class EarningsService:
         role, me = await BusinessBookingsService(self.db)._role(user, bid)
         if role is None:
             raise _error(404, "not_found", "No business found for this id")
-        if role == STAFF:
-            # Staff only ever see their own earnings.
+        if role != OWNER:
+            # Desk-only members perform no services, so have no earnings to show.
+            if me.role == "front_desk":
+                raise _error(403, "forbidden", "Only the owner can see the business's earnings")
+            # Staff (including staff who also run the desk) only ever see their own.
             if staff_id is not None and staff_id != me.id:
                 raise _error(403, "forbidden", "You can only see your own earnings")
             staff_id = me.id
-        elif role != OWNER:
-            raise _error(403, "forbidden", "Only the owner can see the business's earnings")
 
         if end_day < start_day:
             raise _error(400, "validation_error", "to must be on or after from")
@@ -154,11 +155,10 @@ class EarningsService:
             return [], []
 
         ids = [b.id for b in bookings]
-        succeeded = (
-            await self.db.execute(
-                select(Payment).where(Payment.booking_id.in_(ids), Payment.status == PaymentStatus.SUCCEEDED)
-            )
-        ).scalars().all()
+        from app.modules.payments.allocations import payment_parts
+
+        # A visit checkout is split per booking (and each tip goes with its staff member's booking).
+        succeeded = await payment_parts(self.db, ids, succeeded_only=True)
         staff_ids = {b.staff_id for b in bookings if b.staff_id}
         names = dict(
             (await self.db.execute(select(Staff.id, Staff.name).where(Staff.id.in_(staff_ids)))).all()
@@ -166,11 +166,11 @@ class EarningsService:
 
         # What settled each booking: its checkout charge, else an M-Pesa deposit.
         method: dict = {}
-        for p in succeeded:
-            if p.kind == PaymentKind.CHARGE:
-                method[p.booking_id] = p.provider
+        for part in succeeded:
+            if part.payment.kind == PaymentKind.CHARGE:
+                method[part.booking_id] = part.payment.provider
             else:
-                method.setdefault(p.booking_id, "mpesa")
+                method.setdefault(part.booking_id, "mpesa")
 
         rows = [
             agg.BookingRow(
@@ -194,5 +194,8 @@ class EarningsService:
             )
             for b in bookings
         ]
-        payments = [agg.PaymentRow(p.booking_id, p.kind, p.provider, p.amount, p.tip_amount or 0) for p in succeeded]
+        payments = [
+            agg.PaymentRow(part.booking_id, part.payment.kind, part.payment.provider, part.amount, part.tip)
+            for part in succeeded
+        ]
         return rows, payments

@@ -27,6 +27,11 @@ class User(Base):
     phone_verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     # Google's stable account id ("sub"); set once the user has signed in with Google.
     google_sub: Mapped[Optional[str]] = mapped_column(Text, unique=True, nullable=True, index=True)
+    # Profile picture: a small square JPEG in storage (app/core/images.py), or null for initials.
+    avatar_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    avatar_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # The picture on their Google account (from the last Google sign-in), offered as "use my Google photo".
+    google_picture_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     verified: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     auth_type: Mapped[AuthType] = mapped_column(String(20), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(

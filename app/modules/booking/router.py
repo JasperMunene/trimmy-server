@@ -13,6 +13,8 @@ from app.modules.booking.business_bookings import BusinessBookingsService
 from app.modules.booking.reschedule import RescheduleService
 from app.modules.booking.reviews import ReviewsService
 from app.modules.booking.schemas import (
+    AddServiceRequest,
+    VisitResponse,
     AssignStaffRequest,
     BookingResponse,
     BusinessBookingsResponse,
@@ -35,6 +37,7 @@ from app.modules.booking.service import AvailabilityService
 availability_router = APIRouter(prefix="/businesses", tags=["Booking"])
 bookings_router = APIRouter(prefix="/bookings", tags=["Booking"])
 my_bookings_router = APIRouter(tags=["Booking"])
+visits_router = APIRouter(tags=["Booking"])
 
 _SERVICE_IDS = Query(..., alias="serviceIds", description="Repeat for each service: ?serviceIds=a&serviceIds=b")
 
@@ -194,6 +197,31 @@ async def update_booking_status(
     """Check in (in_progress), complete, mark no-show (after the start time) or cancel.
     Owner and front desk for any booking; staff can check in and complete their own."""
     return await BusinessBookingsService(db).update_status(current_user, booking_id, data)
+
+
+@bookings_router.post("/{booking_id}/add-service", status_code=status.HTTP_201_CREATED, response_model=VisitResponse)
+async def add_service_to_visit(
+    booking_id: str,
+    data: AddServiceRequest,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Owner or front desk: the customer wants something else done too, maybe by someone else
+    (hair, now nails). Starts now, right after this booking, or at a time today; joins this
+    booking's visit so it's all checked out and tipped together. 409 slot_unavailable carries
+    nextFreeAt when that person is busy."""
+    return await BusinessBookingsService(db).add_service(current_user, booking_id, data)
+
+
+@visits_router.get("/visits/{visit_id}", response_model=VisitResponse)
+async def get_visit(
+    visit_id: str,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Owner or front desk: a multi-staff visit, its bookings, per-person totals and balance."""
+    from app.modules.booking.visits import VisitsService
+    return await VisitsService(db).get(current_user, visit_id)
 
 
 @bookings_router.patch("/{booking_id}/staff", response_model=BookingResponse)

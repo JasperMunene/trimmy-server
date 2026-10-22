@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field, model_validator
+from pydantic import BaseModel, EmailStr, Field, computed_field, model_validator
 from typing import Optional
 from datetime import datetime
 import uuid as uuid_pkg
@@ -62,6 +62,15 @@ class UserResponse(BaseModel):
     auth_type: str
     verified: bool
     created_at: datetime
+    # Their profile picture (a small square JPEG), or null: show initials.
+    avatar_url: Optional[str] = None
+    google_picture_url: Optional[str] = Field(None, exclude=True)
+
+    @computed_field
+    @property
+    def has_google_picture(self) -> bool:
+        """Their Google account has a picture they can use (POST /auth/me/avatar/google)."""
+        return bool(self.google_picture_url)
 
     model_config = {"from_attributes": True}
 

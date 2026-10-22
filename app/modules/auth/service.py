@@ -461,6 +461,16 @@ class AuthService:
         from app.modules.business.models import Business, BusinessPhoto, Staff
         from app.modules.business.tasks import delete_stored_object
 
+        from app.modules.business.models import StaffPortfolioPhoto
+
+        # Their profile picture and portfolio photos go with them.
+        staff_ids = list((await self.db.execute(select(Staff.id).where(Staff.user_id == user.id))).scalars())
+        file_keys = [user.avatar_key] if user.avatar_key else []
+        if staff_ids:
+            file_keys += list((await self.db.execute(
+                select(StaffPortfolioPhoto.storage_key).where(StaffPortfolioPhoto.staff_id.in_(staff_ids))
+            )).scalars())
+            await self.db.execute(delete(StaffPortfolioPhoto).where(StaffPortfolioPhoto.staff_id.in_(staff_ids)))
         # Staff rows reference users without a FK, so clear them explicitly.
         await self.db.execute(delete(Staff).where(Staff.user_id == user.id))
         photo_keys = [
@@ -481,7 +491,7 @@ class AuthService:
         await self.db.delete(user)
         await self.db.commit()
 
-        for key in photo_keys:
+        for key in photo_keys + file_keys:
             await delete_stored_object.enqueue(key=key)
 
     # ─── OTP helpers ──────────────────────────────────────────

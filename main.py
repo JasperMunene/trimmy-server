@@ -15,7 +15,7 @@ from app.core.rate_limit import limiter
 from app.core.storage import LocalStorage, get_storage
 from app.workers.broker import publisher
 from app.modules.auth.router import router as auth_router
-from app.modules.booking.router import availability_router, bookings_router, my_bookings_router
+from app.modules.booking.router import availability_router, bookings_router, my_bookings_router, visits_router
 from app.modules.booking.time_off import router as time_off_router
 from app.modules.customers.router import router as customers_router
 from app.modules.favorites.router import router as favorites_router
@@ -28,7 +28,7 @@ from app.modules.notifications.realtime import hub as realtime_hub
 from app.modules.daysummary.router import router as day_summary_router
 from app.modules.business.router import discovery_router
 from app.modules.business.router import options_router
-from app.modules.payments.router import booking_payments_router
+from app.modules.payments.router import booking_payments_router, visit_payments_router
 from app.modules.payments.router import router as payments_router
 from app.modules.business.router import router as business_router
 from app.modules.business.router import team_router
@@ -107,7 +107,9 @@ app.include_router(options_router, prefix=settings.API_V1_STR)
 app.include_router(payments_router, prefix=settings.API_V1_STR)
 app.include_router(bookings_router, prefix=settings.API_V1_STR)
 app.include_router(booking_payments_router, prefix=settings.API_V1_STR)
+app.include_router(visit_payments_router, prefix=settings.API_V1_STR)
 app.include_router(my_bookings_router, prefix=settings.API_V1_STR)
+app.include_router(visits_router, prefix=settings.API_V1_STR)
 
 if isinstance(get_storage(), LocalStorage):
     # Dev only: serve locally stored uploads. With R2, files are served by R2 itself.

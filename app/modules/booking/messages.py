@@ -55,7 +55,6 @@ class BookingContext:
 async def load_context(db: AsyncSession, booking_id) -> Optional[BookingContext]:
     from app.modules.booking.models import Booking
     from app.modules.business.models import Business, Staff
-    from app.modules.payments.models import Payment
 
     booking = (await db.execute(
         select(Booking).where(Booking.id == booking_id).options(selectinload(Booking.lines))
@@ -69,10 +68,11 @@ async def load_context(db: AsyncSession, booking_id) -> Optional[BookingContext]
     location = (business.location if business else None) or {}
     map_link = (f"https://maps.google.com/?q={location['lat']},{location['lng']}"
                 if location.get("lat") is not None and location.get("lng") is not None else None)
-    settled = (await db.execute(
-        select(Payment).where(Payment.booking_id == booking.id, Payment.status == "succeeded")
-        .order_by(Payment.settled_at.desc())
-    )).scalars().first()
+    from app.modules.payments.allocations import payment_parts
+
+    # Including a visit checkout that covered this booking along with others.
+    parts = await payment_parts(db, [booking.id], succeeded_only=True)
+    settled = max((part.payment for part in parts), key=lambda p: p.settled_at or p.created_at, default=None)
     method = reference = None
     if booking.payment_status == "paid":
         method, reference = ("M-Pesa", settled.mpesa_receipt) if settled is not None and settled.kind == "charge" else ("Cash", None)

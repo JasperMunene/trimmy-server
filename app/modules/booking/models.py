@@ -55,6 +55,26 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class Visit(Base):
+    """One customer's time at the business when it spans several bookings, e.g. hair with one
+    stylist and nails with another. Each booking keeps its own staff member, time and commission;
+    the visit groups them so they can be checked out (and tipped) together. Single bookings have
+    no visit."""
+
+    __tablename__ = "visits"
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(UUID, primary_key=True, default=uuid4)
+    business_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID, ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False
+    )
+    created_by: Mapped[Optional[uuid_pkg.UUID]] = mapped_column(UUID, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    __table_args__ = (Index("ix_visits_business_created", "business_id", "created_at"),)
+
+
 class Booking(Base):
     __tablename__ = "bookings"
 
@@ -74,6 +94,10 @@ class Booking(Base):
     )
     source: Mapped[str] = mapped_column(String(20), nullable=False, default=BookingSource.ONLINE)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Set when this booking is part of a multi-staff visit (see Visit).
+    visit_id: Mapped[Optional[uuid_pkg.UUID]] = mapped_column(
+        UUID, ForeignKey("visits.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     # The booked interval in UTC, plus the local date/time the customer picked.
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

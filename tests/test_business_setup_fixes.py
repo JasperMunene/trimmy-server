@@ -175,6 +175,9 @@ class FakeR2:
     async def read_head(self, key, length):
         return self.objects[key][:length]
 
+    async def read(self, key):
+        return self.objects[key]
+
 
 @pytest.fixture
 def r2(monkeypatch):
