@@ -77,6 +77,10 @@ async def _charge_paid(db: AsyncSession, payment: Payment) -> None:
     from app.modules.booking.bookings import record_refund
     from app.modules.payments.service import mark_charged
 
+    if payment.visit_id is not None:
+        await _visit_charge_paid(db, payment)
+        return
+
     booking = (
         await db.execute(select(Booking).where(Booking.id == payment.booking_id).options(selectinload(Booking.events)))
     ).scalar_one()
@@ -91,6 +95,40 @@ async def _charge_paid(db: AsyncSession, payment: Payment) -> None:
         return
     await mark_charged(db, booking, reason=f"mpesa:{payment.mpesa_receipt}" if payment.mpesa_receipt else "mpesa",
                        tip=payment.tip_amount or 0)
+
+
+async def _visit_charge_paid(db: AsyncSession, payment: Payment) -> None:
+    """One payment for a whole visit: settle each booking with its share and its staff member's tip."""
+    from app.modules.booking.bookings import record_refund
+    from app.modules.payments.models import PaymentAllocation
+    from app.modules.payments.service import mark_charged
+
+    parts = (
+        await db.execute(select(PaymentAllocation).where(PaymentAllocation.payment_id == payment.id))
+    ).scalars().all()
+    query = (
+        select(Booking).where(Booking.id.in_([a.booking_id for a in parts]))
+        .options(selectinload(Booking.events)).order_by(Booking.id)
+    )
+    if db.bind.dialect.name == "postgresql":
+        query = query.with_for_update()
+    bookings = {b.id: b for b in (await db.execute(query)).scalars()}
+    reason = f"mpesa:{payment.mpesa_receipt}" if payment.mpesa_receipt else "mpesa"
+    for part in parts:
+        booking = bookings.get(part.booking_id)
+        if booking is None:
+            continue
+        if booking.payment_status == BookingPaymentStatus.PAID:
+            # That part was settled another way meanwhile (e.g. cash): its share is owed back.
+            refund = part.amount + (part.tip_amount or 0)
+            record_refund(booking, fee=0, refund=refund)
+            _tell_refund(db, booking.id, refund, "You were charged twice for part of this visit")
+            logger.error(
+                f"Booking {booking.reference} was already paid when visit charge {payment.mpesa_receipt} "
+                f"arrived; KES {refund} refund due"
+            )
+            continue
+        await mark_charged(db, booking, reason=reason, tip=part.tip_amount or 0)
 
 
 async def _deposit_paid(db: AsyncSession, payment: Payment, now: datetime) -> bool:

@@ -190,6 +190,8 @@ class GoogleAuthService:
         claims = await fetch_google_claims(code)
         validate_claims(claims, state["nonce"])
         user = await self._find_or_link_user(claims)
+        # No picture yet but Google has one (e.g. a new sign-up): use it, in the background.
+        fetch_photo = user.avatar_key is None and bool(user.google_picture_url)
 
         exchange_code = secrets.token_urlsafe(32)
         self.db.add(
@@ -200,6 +202,12 @@ class GoogleAuthService:
             )
         )
         await self.db.commit()
+        if fetch_photo:
+            from app.modules.auth.tasks import import_google_avatar
+            try:
+                await import_google_avatar.enqueue(user_id=str(user.id))
+            except Exception as e:  # a missing photo never blocks signing in
+                logger.warning(f"Couldn't queue the Google photo import for user {user.id}: {e}")
         return exchange_code
 
     async def exchange(self, code: str, code_verifier: Optional[str]) -> AuthResponse:
@@ -249,6 +257,7 @@ class GoogleAuthService:
         result = await self.db.execute(select(User).where(User.google_sub == sub))
         user = result.scalar_one_or_none()
         if user:
+            user.google_picture_url = claims.get("picture") or user.google_picture_url
             return user
 
         result = await self.db.execute(select(User).where(User.email == email))
@@ -265,6 +274,7 @@ class GoogleAuthService:
                 user.verified = True
                 user.verified_at = now
             user.google_sub = sub
+            user.google_picture_url = claims.get("picture") or user.google_picture_url
             await self._claim(user)
             return user
 
@@ -274,6 +284,7 @@ class GoogleAuthService:
             last_name=claims.get("family_name"),
             auth_type=AuthType.GOOGLE,
             google_sub=sub,
+            google_picture_url=claims.get("picture"),
             verified=True,
             verified_at=now,
         )

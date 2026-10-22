@@ -277,14 +277,15 @@ GUEST_KINDS = ("confirmed", "cancelled_by_business", "rescheduled_by_business", 
 
 
 async def desk_user_ids(db: AsyncSession, business_id: uuid_pkg.UUID) -> list[uuid_pkg.UUID]:
-    """The owner and every front desk member with an account: whoever runs the bookings."""
-    from sqlalchemy import select
+    """The owner and everyone with front desk access and an account: whoever runs the bookings."""
+    from sqlalchemy import or_, select
 
     from app.modules.business.models import Business, Staff
 
     business = await db.get(Business, business_id)
     front_desk = (await db.execute(
-        select(Staff.user_id).where(Staff.business_id == business_id, Staff.role == "front_desk",
+        select(Staff.user_id).where(Staff.business_id == business_id,
+                                    or_(Staff.role == "front_desk", Staff.front_desk_access.is_(True)),
                                     Staff.user_id.is_not(None))
     )).scalars().all()
     return ([business.owner_id] if business else []) + list(front_desk)
@@ -322,6 +323,8 @@ async def push_booking_update(
                 recipients.append(staff.user_id if staff else None)
     if actor_id:
         recipients = [r for r in recipients if str(r) != actor_id]
+    # Once each: a stylist who also runs the desk is on both lists.
+    recipients = list(dict.fromkeys(recipients))
 
     # Read before deliver() commits (which expires the ORM rows).
     guest = (booking.customer_phone, booking.customer_email) if booking.customer_id is None else None

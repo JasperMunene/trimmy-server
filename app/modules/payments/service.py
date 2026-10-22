@@ -93,6 +93,8 @@ class PaymentsService:
 
         if tip and booking.staff_id is None:
             raise _error(400, "tip_needs_staff", "Assign a staff member first, so the tip has someone to go to")
+        if booking.visit_id is not None:
+            await self._no_pending_visit_charge(booking.visit_id)
 
         balance = max(booking.total_amount - deposit_paid(booking), 0)
         due = balance + tip  # one payment: the balance and the tip together
@@ -115,6 +117,121 @@ class PaymentsService:
         )
         return 202, self._started(payment, push, expires_at=None)
 
+    async def charge_visit(
+        self, user: User, visit_id: str, method: str, phone: Optional[str], tips: list, booking_ids: Optional[list],
+    ):
+        """Check a multi-staff visit out in one payment: every part's balance plus each person's tip
+        (the customer's split). Returns (status_code, body) like charge(): 200 with the Visit for cash
+        or nothing due, 202 with the started payment for M-Pesa."""
+        from app.modules.booking.bookings import deposit_paid
+        from app.modules.booking.visits import CHARGEABLE, VisitsService
+        from app.modules.payments.models import PaymentAllocation
+
+        visits = VisitsService(self.db, self.now)
+        visit, bookings = await visits.load(user, visit_id)
+        if self.db.bind.dialect.name == "postgresql":
+            # Locked in a fixed order, so two checkouts of one visit can't both take it.
+            ids = sorted(b.id for b in bookings)
+            await self.db.execute(select(Booking.id).where(Booking.id.in_(ids)).order_by(Booking.id).with_for_update())
+        counted = [b for b in bookings if b.status not in (BookingStatus.CANCELLED, BookingStatus.NO_SHOW)]
+        unpaid = [b for b in counted if b.payment_status != BookingPaymentStatus.PAID]
+
+        if booking_ids is not None:
+            wanted = {uuid_pkg.UUID(str(i)) for i in booking_ids}
+            if not wanted <= {b.id for b in unpaid}:
+                raise _error(400, "validation_error", "bookingIds must be unpaid bookings in this visit")
+            chargeable = [b for b in unpaid if b.id in wanted]
+            if any(b.status not in CHARGEABLE for b in chargeable):
+                raise _error(409, "not_in_progress", "Only started or finished services can be charged")
+        else:
+            waiting = [b for b in unpaid if b.status not in CHARGEABLE]
+            if waiting:
+                raise _error(
+                    409, "visit_not_ready", "Some services haven't started yet: start them, cancel them, or charge the rest",
+                    bookingIds=[str(b.id) for b in waiting],
+                )
+            chargeable = unpaid
+        if not chargeable:
+            raise _error(409, "already_paid", "This visit is already paid")
+
+        # Each person's tip goes on their first booking being charged (so it lands in their wallet with it).
+        chargeable.sort(key=lambda b: (_aware(b.starts_at), str(b.id)))
+        first_for: dict = {}
+        for b in chargeable:
+            if b.staff_id is not None:
+                first_for.setdefault(b.staff_id, b.id)
+        tip_for: dict = {}
+        for t in tips:
+            if t.staff_id in tip_for:
+                raise _error(400, "validation_error", "Each staff member can only be tipped once")
+            if t.amount and t.staff_id not in first_for:
+                raise _error(400, "tip_staff_not_in_visit", "Tips can only go to someone whose service is being charged")
+            tip_for[t.staff_id] = t.amount
+        if sum(tip_for.values()) > 100_000:
+            raise _error(400, "validation_error", "Tips can be at most KES 100,000 in total")
+        await self._no_pending_visit_charge(visit.id)
+        await self._no_pending_booking_charges([b.id for b in chargeable])
+
+        parts = [
+            (b, max(b.total_amount - deposit_paid(b), 0), tip_for.get(b.staff_id, 0) if first_for.get(b.staff_id) == b.id else 0)
+            for b in chargeable
+        ]
+        tip_total = sum(tip for _, _, tip in parts)
+        due = sum(share for _, share, _ in parts) + tip_total
+        anchor = chargeable[0]
+
+        if method == "cash" or due == 0:
+            if due > 0:
+                payment = Payment(
+                    id=uuid_pkg.uuid4(), booking_id=anchor.id, visit_id=visit.id, kind=PaymentKind.CHARGE, provider="cash",
+                    amount=due, tip_amount=tip_total, currency=anchor.currency, phone="", destination_type="cash",
+                    party_b="", account_reference=anchor.reference, status=PaymentStatus.SUCCEEDED, settled_at=self.now,
+                )
+                self.db.add(payment)
+                for b, share, tip in parts:
+                    self.db.add(PaymentAllocation(payment_id=payment.id, booking_id=b.id, staff_id=b.staff_id, amount=share, tip_amount=tip))
+            for b, _, tip in parts:
+                await self.db.refresh(b, ["events"])
+                await mark_charged(self.db, b, reason="cash" if due else "nothing_due", actor_id=user.id, tip=tip)
+            await self.db.commit()
+            return 200, await visits.get(user, str(visit.id))
+
+        payment, push = await self._push(
+            anchor, kind=PaymentKind.CHARGE, amount=due, phone=phone, description="Payment",
+            already_paid="This visit is already paid",
+            busy="An M-Pesa prompt was just sent; wait for the customer to respond", tip=tip_total,
+            visit_id=visit.id, allocations=[(b.id, b.staff_id, share, tip) for b, share, tip in parts],
+        )
+        started = self._started(payment, push, expires_at=None)
+        started.visit_id = visit.id
+        return 202, started
+
+    async def _no_pending_visit_charge(self, visit_id) -> None:
+        """A visit's M-Pesa prompt still waiting for the customer blocks charging its bookings again."""
+        pending = (
+            await self.db.execute(
+                select(Payment).where(
+                    Payment.visit_id == visit_id, Payment.kind == PaymentKind.CHARGE, Payment.status == PaymentStatus.PENDING,
+                ).order_by(Payment.created_at.desc())
+            )
+        ).scalars().first()
+        if pending is not None and self.now - _aware(pending.created_at) < PENDING_LOCK:
+            raise _error(409, "payment_in_progress", "An M-Pesa prompt was just sent for this visit; wait for the customer to respond",
+                         paymentId=str(pending.id))
+
+    async def _no_pending_booking_charges(self, booking_ids: list) -> None:
+        pending = (
+            await self.db.execute(
+                select(Payment).where(
+                    Payment.booking_id.in_(booking_ids), Payment.visit_id.is_(None),
+                    Payment.kind == PaymentKind.CHARGE, Payment.status == PaymentStatus.PENDING,
+                ).order_by(Payment.created_at.desc())
+            )
+        ).scalars().first()
+        if pending is not None and self.now - _aware(pending.created_at) < PENDING_LOCK:
+            raise _error(409, "payment_in_progress", "An M-Pesa prompt was just sent for one of these services; wait for it",
+                         paymentId=str(pending.id))
+
     # ─── shared STK push path ────────────────────────────────
 
     async def _booking(self, booking_id: str) -> Optional[Booking]:
@@ -126,18 +243,20 @@ class PaymentsService:
 
     async def _push(
         self, booking: Booking, *, kind: str, amount: int, phone: Optional[str], description: str,
-        already_paid: str, busy: str, tip: int = 0,
+        already_paid: str, busy: str, tip: int = 0, visit_id=None, allocations: Optional[list] = None,
     ) -> tuple[Payment, "StkPushResult"]:
-        """Guards, routing and the STK push, shared by deposits and checkout charges."""
+        """Guards, routing and the STK push, shared by deposits and checkout charges. A visit checkout
+        (visit_id) counts attempts per visit, prompts against `booking` (its first part) and records
+        `allocations` [(booking_id, staff_id, amount, tip)] with the payment."""
+        scope = Payment.visit_id == visit_id if visit_id is not None else Payment.booking_id == booking.id
         attempts = (
-            await self.db.execute(
-                select(Payment).where(Payment.booking_id == booking.id, Payment.kind == kind).order_by(Payment.created_at)
-            )
+            await self.db.execute(select(Payment).where(scope, Payment.kind == kind).order_by(Payment.created_at))
         ).scalars().all()
         if len(attempts) >= MAX_ATTEMPTS:
             raise _error(429, "too_many_attempts", "Too many payment attempts for this booking")
         latest = attempts[-1] if attempts else None
-        if latest and latest.status == PaymentStatus.SUCCEEDED:
+        # A visit can be paid in parts, so an earlier success doesn't mean nothing's left (the caller checked).
+        if latest and latest.status == PaymentStatus.SUCCEEDED and visit_id is None:
             raise _error(409, "already_paid", already_paid)
         if latest and latest.status == PaymentStatus.PENDING and self.now - _aware(latest.created_at) < PENDING_LOCK:
             raise _error(409, "payment_in_progress", busy, paymentId=str(latest.id))
@@ -163,11 +282,17 @@ class PaymentsService:
             raise _error(503, "payments_unavailable", "Payments are temporarily unavailable")
 
         payment = Payment(
-            id=uuid_pkg.uuid4(), booking_id=booking.id, kind=kind, amount=amount, tip_amount=tip,
+            id=uuid_pkg.uuid4(), booking_id=booking.id, visit_id=visit_id, kind=kind, amount=amount, tip_amount=tip,
             currency=booking.currency, phone=msisdn, destination_type=destination.type,
             party_b=route.party_b, account_reference=route.account_reference,
         )
         self.db.add(payment)
+        if allocations:
+            from app.modules.payments.models import PaymentAllocation
+            for booking_id, staff_id, share, part_tip in allocations:
+                self.db.add(PaymentAllocation(
+                    payment_id=payment.id, booking_id=booking_id, staff_id=staff_id, amount=share, tip_amount=part_tip,
+                ))
         await self.db.commit()  # recorded before the push, so a crash mid-call still leaves a trace
 
         try:
@@ -207,7 +332,7 @@ async def mark_charged(db: AsyncSession, booking: Booking, *, reason: str, actor
     booking.payment_status = BookingPaymentStatus.PAID
     booking.paid_at = datetime.now(timezone.utc)
     staff = await db.get(Staff, booking.staff_id) if booking.staff_id else None
-    if staff is not None and staff.commission_percent:
+    if staff is not None and staff.commission_percent and staff.role != "front_desk":
         # On the services only: a tip is all theirs, through the wallet below.
         booking.staff_commission = math.floor(booking.total_amount * staff.commission_percent / 100)
     if tip > 0 and staff is not None:

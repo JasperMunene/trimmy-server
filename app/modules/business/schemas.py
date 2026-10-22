@@ -313,12 +313,18 @@ class TeamModeResponse(BaseModel):
 class InviteTeamMemberRequest(BaseModel):
     email: Optional[str] = None
     phone: Optional[str] = None
+    # staff = takes appointments; front_desk = runs the desk only (no services, no commission).
     role: str = Field(..., pattern=r"^(front_desk|staff)$")
+    # Staff who also run the front desk (switch between the two in the app). Always on for front_desk.
+    front_desk_access: bool = Field(False, alias="frontDeskAccess")
+
+    model_config = {"populate_by_name": True}
 
 
 class AddTeamMemberRequest(InviteTeamMemberRequest):
     name: str = Field(..., min_length=1, max_length=100)
-    commission_percent: int = Field(40, alias="commissionPercent", ge=0, le=100)
+    # Staff only (defaults to 40); front desk earns no commission, so it must be left out.
+    commission_percent: Optional[int] = Field(None, alias="commissionPercent", ge=0, le=100)
     # null = works whenever the business is open.
     working_days: Optional[List[Weekday]] = Field(None, alias="workingDays")
 
@@ -326,10 +332,14 @@ class AddTeamMemberRequest(InviteTeamMemberRequest):
 
 
 class UpdateTeamMemberRequest(BaseModel):
-    """Only the fields sent are changed; send workingDays: null to clear it."""
+    """Only the fields sent are changed; send workingDays: null to clear it.
+    takesAppointments / frontDeskAccess set what they do: both = staff who also run the desk;
+    desk only = front_desk (commission cleared); at least one must stay on."""
 
     commission_percent: Optional[int] = Field(None, alias="commissionPercent", ge=0, le=100)
     working_days: Optional[List[Weekday]] = Field(None, alias="workingDays")
+    takes_appointments: Optional[bool] = Field(None, alias="takesAppointments")
+    front_desk_access: Optional[bool] = Field(None, alias="frontDeskAccess")
 
     model_config = {"populate_by_name": True}
 
@@ -346,7 +356,9 @@ class TeamMemberResponse(BaseModel):
     phone: Optional[str] = None
     role: str
     status: str
-    commission_percent: int = Field(alias="commissionPercent")
+    # Null for desk-only members: they perform no services.
+    commission_percent: Optional[int] = Field(None, alias="commissionPercent")
+    front_desk_access: bool = Field(False, alias="frontDeskAccess")
     working_days: Optional[List[str]] = Field(None, alias="workingDays")
     sent_at: datetime = Field(alias="sentAt")
 
@@ -384,6 +396,10 @@ class MyBusinessResponse(BaseModel):
     # The caller's own Staff record there: bookings, earnings and payouts are keyed by it.
     # Null for an owner who doesn't take appointments themselves (team mode).
     staff_id: Optional[uuid_pkg.UUID] = Field(None, alias="staffId")
+    # Staff with front desk access can switch between their schedule and the desk.
+    front_desk_access: bool = Field(False, alias="frontDeskAccess")
+    # The app modes open to them here: "staff" (my schedule) and/or "front_desk". Empty for owners.
+    modes: List[str] = []
 
     model_config = {"populate_by_name": True}
 
@@ -589,6 +605,28 @@ class PhotoUploadUrlResponse(BaseModel):
     headers: dict[str, str]
     key: str
     expires_in: int = Field(alias="expiresIn")
+
+    model_config = {"populate_by_name": True}
+
+
+class CompletePortfolioUploadRequest(BaseModel):
+    key: str = Field(..., min_length=1, max_length=300)
+
+
+class PortfolioPhotoResponse(BaseModel):
+    photo_id: uuid_pkg.UUID = Field(alias="photoId")
+    staff_id: uuid_pkg.UUID = Field(alias="staffId")
+    url: str
+    created_at: datetime = Field(alias="createdAt")
+
+    model_config = {"populate_by_name": True}
+
+
+class PortfolioResponse(BaseModel):
+    staff_id: uuid_pkg.UUID = Field(alias="staffId")
+    # Newest first.
+    photos: List[PortfolioPhotoResponse]
+    max_photos: int = Field(alias="maxPhotos")
 
     model_config = {"populate_by_name": True}
 

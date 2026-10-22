@@ -1,7 +1,7 @@
 import logging
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -130,6 +130,32 @@ async def update_me(
 ):
     service = AuthService(db)
     return await service.update_me(current_user, data)
+
+
+@router.put("/me/avatar", response_model=UserResponse)
+async def upload_avatar(
+    photo: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Set your profile picture (JPEG or PNG, up to 10 MB). It's cropped square and stored as a
+    small JPEG, and shows on your staff profile at every business you work at."""
+    from app.modules.auth.avatar import AvatarService
+    return await AvatarService(db).upload(current_user, photo)
+
+
+@router.post("/me/avatar/google", response_model=UserResponse)
+async def use_google_avatar(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Use the picture on your Google account (has_google_picture is true after a Google sign-in)."""
+    from app.modules.auth.avatar import AvatarService
+    return await AvatarService(db).from_google(current_user)
+
+
+@router.delete("/me/avatar", response_model=UserResponse)
+async def remove_avatar(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Remove your profile picture (your initials show instead)."""
+    from app.modules.auth.avatar import AvatarService
+    return await AvatarService(db).remove(current_user)
 
 
 @router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)

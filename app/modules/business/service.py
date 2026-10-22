@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.phone_utils import InvalidPhoneNumberError, normalise_phone
+from app.core.images import PHOTO_SIDE, ImageError, shrink_image
 from app.core.storage import IMAGE_TYPES, DirectUploadUnsupported, get_storage, sniff_image
 from app.modules.auth.models import User
 from app.modules.business.models import (
@@ -26,6 +27,7 @@ from app.modules.business.models import (
     Service,
     ServiceCategory,
     Staff,
+    StaffPortfolioPhoto,
     StaffService,
     TeamInvitation,
     TeamMode,
@@ -39,6 +41,7 @@ from app.modules.business.schemas import (
     BusinessSummaryResponse,
     CancellationPolicyResponse,
     CompletePhotoUploadRequest,
+    CompletePortfolioUploadRequest,
     CreateBusinessRequest,
     CreateBusinessResponse,
     CreateServiceCategoryRequest,
@@ -57,6 +60,8 @@ from app.modules.business.schemas import (
     PhotoUploadUrlRequest,
     PhotoUploadUrlResponse,
     PoliciesResponse,
+    PortfolioPhotoResponse,
+    PortfolioResponse,
     ProfilePoliciesResponse,
     ProfileServiceResponse,
     PublishBusinessRequest,
@@ -203,6 +208,10 @@ def photo_response(p: BusinessPhoto) -> PhotoResponse:
     return PhotoResponse(photoId=p.id, businessId=p.business_id, url=p.url, isCover=p.is_cover, createdAt=p.created_at)
 
 
+def portfolio_photo_response(p: StaffPortfolioPhoto) -> PortfolioPhotoResponse:
+    return PortfolioPhotoResponse(photoId=p.id, staffId=p.staff_id, url=p.url, createdAt=p.created_at)
+
+
 def booking_settings_response(b: Business) -> BookingSettingsResponse:
     return BookingSettingsResponse(
         businessId=b.id,
@@ -267,6 +276,11 @@ def business_summary(biz: Business, distance_km: float = 0.0) -> BusinessSummary
     )
 
 
+# Commission for staff who don't say (the invite form's default). Desk-only members get none:
+# a percent sent for them (older app versions always send one) is ignored, not an error.
+DEFAULT_COMMISSION = 40
+
+
 def team_member_response(inv: TeamInvitation) -> TeamMemberResponse:
     return TeamMemberResponse(
         invitationId=inv.id,
@@ -277,7 +291,8 @@ def team_member_response(inv: TeamInvitation) -> TeamMemberResponse:
         phone=inv.phone,
         role=inv.role,
         status=inv.status,
-        commissionPercent=inv.commission_percent if inv.commission_percent is not None else 40,
+        commissionPercent=inv.commission_percent,
+        frontDeskAccess=bool(inv.front_desk_access),
         workingDays=inv.working_days,
         sentAt=inv.sent_at,
     )
@@ -606,6 +621,220 @@ class BusinessService:
         if key:
             await delete_stored_object.enqueue(key=key)
 
+    # ─── staff portfolio ─────────────────────────────────────
+    # Photos of a staff member's work. The member manages their own; the owner manages
+    # anyone's. Same upload shapes as business photos: presigned direct upload
+    # (upload-url → PUT → complete), or multipart through the API.
+
+    async def _get_portfolio_staff(self, business_id: str, user_id: str, staff_id: str) -> Staff:
+        bid = self._parse_path_id(business_id, "businessId")
+        uid = self._parse_path_id(user_id, "userId")
+        staff = await self.db.get(Staff, self._parse_path_id(staff_id, "staffId"))
+        business = await self.db.get(Business, bid)
+        if business is None or staff is None or staff.business_id != bid:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "message": "staffId does not exist for this business"},
+            )
+        if business.owner_id == uid or staff.user_id == uid:
+            return staff
+        works_here = (
+            await self.db.execute(select(Staff.id).where(Staff.business_id == bid, Staff.user_id == uid))
+        ).first()
+        if works_here:
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "forbidden", "message": "Only the owner or this staff member can change their portfolio"},
+            )
+        raise HTTPException(status_code=404, detail={"error": "not_found", "message": "Business not found"})
+
+    async def _portfolio_rows(self, staff_id: uuid_pkg.UUID) -> list:
+        return (
+            await self.db.execute(
+                select(StaffPortfolioPhoto)
+                .where(StaffPortfolioPhoto.staff_id == staff_id)
+                .order_by(StaffPortfolioPhoto.created_at.desc())
+            )
+        ).scalars().all()
+
+    async def _require_portfolio_room(self, staff_id: uuid_pkg.UUID) -> None:
+        count = (
+            await self.db.execute(
+                select(func.count()).select_from(StaffPortfolioPhoto).where(StaffPortfolioPhoto.staff_id == staff_id)
+            )
+        ).scalar_one()
+        if count >= settings.MAX_PORTFOLIO_PHOTOS:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "portfolio_full",
+                    "message": f"A portfolio holds up to {settings.MAX_PORTFOLIO_PHOTOS} photos; delete one first",
+                },
+            )
+
+    @staticmethod
+    def _portfolio_key(staff: Staff, photo_id: uuid_pkg.UUID, content_type: str) -> str:
+        return f"businesses/{staff.business_id}/staff/{staff.id}/portfolio/{photo_id}.{IMAGE_TYPES[content_type]}"
+
+    async def get_portfolio(self, business_id: str, user_id: str, staff_id: str) -> PortfolioResponse:
+        staff = await self._get_portfolio_staff(business_id, user_id, staff_id)
+        rows = await self._portfolio_rows(staff.id)
+        return PortfolioResponse(
+            staffId=staff.id,
+            photos=[portfolio_photo_response(p) for p in rows],
+            maxPhotos=settings.MAX_PORTFOLIO_PHOTOS,
+        )
+
+    async def create_portfolio_upload_url(
+        self, business_id: str, user_id: str, staff_id: str, data: PhotoUploadUrlRequest
+    ) -> PhotoUploadUrlResponse:
+        staff = await self._get_portfolio_staff(business_id, user_id, staff_id)
+        if data.size_bytes > settings.MAX_PHOTO_BYTES:
+            raise self._too_large()
+        await self._require_portfolio_room(staff.id)
+
+        key = self._portfolio_key(staff, uuid_pkg.uuid4(), data.content_type)
+        try:
+            url = await get_storage().presign_upload(
+                key, data.content_type, data.size_bytes, settings.UPLOAD_URL_EXPIRE_SECONDS
+            )
+        except DirectUploadUnsupported:
+            raise HTTPException(
+                status_code=501,
+                detail={
+                    "error": "direct_upload_unavailable",
+                    "message": "Direct uploads aren't available on this server; use multipart POST /portfolio",
+                },
+            )
+        return PhotoUploadUrlResponse(
+            uploadUrl=url,
+            headers={"Content-Type": data.content_type},
+            key=key,
+            expiresIn=settings.UPLOAD_URL_EXPIRE_SECONDS,
+        )
+
+    async def complete_portfolio_upload(
+        self, business_id: str, user_id: str, staff_id: str, data: CompletePortfolioUploadRequest
+    ) -> PortfolioPhotoResponse:
+        staff = await self._get_portfolio_staff(business_id, user_id, staff_id)
+
+        match = re.fullmatch(
+            rf"businesses/{staff.business_id}/staff/{staff.id}/portfolio/([0-9a-f-]{{36}})\.(jpg|png)", data.key
+        )
+        if not match:
+            raise _validation_error("key was not issued for this staff member")
+        photo_id = uuid_pkg.UUID(match.group(1))
+
+        existing = await self.db.get(StaffPortfolioPhoto, photo_id)
+        if existing:
+            # Retried completion: same answer as the first time.
+            return portfolio_photo_response(existing)
+
+        storage = get_storage()
+        stored = await storage.stat(data.key)
+        if stored is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "upload_not_found", "message": "No uploaded file found for this key; upload it first"},
+            )
+        if stored.size > settings.MAX_PHOTO_BYTES:
+            await storage.delete(data.key)
+            raise self._too_large()
+        actual_type = sniff_image(await storage.read_head(data.key, 16))
+        if actual_type is None or IMAGE_TYPES[actual_type] != match.group(2):
+            await storage.delete(data.key)
+            raise _validation_error("photo must be a JPEG or PNG image")
+        try:
+            await self._require_portfolio_room(staff.id)
+            # Shrunk to a small JPEG (phones upload multi-MB originals) under the same photo id.
+            small = await shrink_image(await storage.read(data.key), PHOTO_SIDE)
+        except ImageError:
+            await storage.delete(data.key)
+            raise _validation_error("photo must be a JPEG or PNG image")
+        except HTTPException:
+            await storage.delete(data.key)
+            raise
+        key = self._portfolio_key(staff, photo_id, "image/jpeg")
+        url = await storage.save(key, small, "image/jpeg")
+        if key != data.key:
+            await storage.delete(data.key)
+        return await self._add_portfolio_photo(staff, photo_id, key, url)
+
+    async def upload_portfolio_photo(
+        self, business_id: str, user_id: str, staff_id: str, photo: UploadFile
+    ) -> PortfolioPhotoResponse:
+        staff = await self._get_portfolio_staff(business_id, user_id, staff_id)
+        await self._require_portfolio_room(staff.id)
+
+        data = await photo.read(settings.MAX_PHOTO_BYTES + 1)
+        if not data:
+            raise _validation_error("photo file is required")
+        if len(data) > settings.MAX_PHOTO_BYTES:
+            raise self._too_large()
+        if sniff_image(data) is None:
+            raise _validation_error("photo must be a JPEG or PNG image")
+        try:
+            data = await shrink_image(data, PHOTO_SIDE)  # a small JPEG, not the camera original
+        except ImageError:
+            raise _validation_error("photo must be a JPEG or PNG image")
+
+        photo_id = uuid_pkg.uuid4()
+        key = self._portfolio_key(staff, photo_id, "image/jpeg")
+        url = await get_storage().save(key, data, "image/jpeg")
+        try:
+            return await self._add_portfolio_photo(staff, photo_id, key, url)
+        except Exception:
+            await delete_stored_object.enqueue(key=key)
+            raise
+
+    async def _add_portfolio_photo(self, staff: Staff, photo_id: uuid_pkg.UUID, key: str, url: str) -> PortfolioPhotoResponse:
+        photo = StaffPortfolioPhoto(id=photo_id, staff_id=staff.id, business_id=staff.business_id, url=url, storage_key=key)
+        self.db.add(photo)
+        await self.db.commit()
+        await self.db.refresh(photo)
+        return portfolio_photo_response(photo)
+
+    async def delete_portfolio_photo(self, business_id: str, user_id: str, staff_id: str, photo_id: str) -> None:
+        staff = await self._get_portfolio_staff(business_id, user_id, staff_id)
+        photo = await self.db.get(StaffPortfolioPhoto, self._parse_path_id(photo_id, "photoId"))
+        if not photo or photo.staff_id != staff.id:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "message": "photoId does not exist in this portfolio"},
+            )
+        key = photo.storage_key
+        await self.db.delete(photo)
+        await self.db.commit()
+        await delete_stored_object.enqueue(key=key)
+
+    async def staff_portfolio_urls(self, staff_ids: list) -> dict:
+        """staff id -> [photo urls], newest first, for the given staff, in one query."""
+        if not staff_ids:
+            return {}
+        rows = await self.db.execute(
+            select(StaffPortfolioPhoto.staff_id, StaffPortfolioPhoto.url)
+            .where(StaffPortfolioPhoto.staff_id.in_(staff_ids))
+            .order_by(StaffPortfolioPhoto.created_at.desc())
+        )
+        mapping: dict = {sid: [] for sid in staff_ids}
+        for staff_id, url in rows:
+            mapping[staff_id].append(url)
+        return mapping
+
+    async def _delete_portfolio_files(self, staff_ids: list) -> list:
+        """Remove these staff members' portfolio rows; returns the storage keys to delete after commit."""
+        if not staff_ids:
+            return []
+        keys = list(
+            (
+                await self.db.execute(
+                    select(StaffPortfolioPhoto.storage_key).where(StaffPortfolioPhoto.staff_id.in_(staff_ids))
+                )
+            ).scalars()
+        )
+        await self.db.execute(delete(StaffPortfolioPhoto).where(StaffPortfolioPhoto.staff_id.in_(staff_ids)))
+        return keys
+
     # ─── set-working-hours ───────────────────────────────────
 
     async def set_working_hours(self, business_id: str, user_id: str, weekly_hours: WeeklyHoursRequest) -> WorkingHoursResponse:
@@ -926,7 +1155,9 @@ class BusinessService:
 
     async def invite_team_member(self, business_id: str, user_id: str, data: InviteTeamMemberRequest) -> TeamMemberResponse:
         business = await self._get_owned_business(business_id, user_id)
-        invitation = await self._create_invitation(business, user_id, data)
+        invitation = await self._create_invitation(
+            business, user_id, data, commission_percent=None if data.role == "front_desk" else DEFAULT_COMMISSION
+        )
         return team_member_response(invitation)
 
     async def _create_invitation(
@@ -967,6 +1198,8 @@ class BusinessService:
             role=data.role,
             status=InvitationStatus.PENDING,
             invited_by=user_id,
+            # Desk-only members always have the desk; staff only if asked.
+            front_desk_access=data.role == "front_desk" or data.front_desk_access,
             **member_fields,
         )
         self.db.add(invitation)
@@ -1145,7 +1378,9 @@ class BusinessService:
             user_id,
             data,
             name=data.name,
-            commission_percent=data.commission_percent,
+            commission_percent=None if data.role == "front_desk" else (
+                DEFAULT_COMMISSION if data.commission_percent is None else data.commission_percent
+            ),
             working_days=self._normalise_days(data.working_days),
         )
         return team_member_response(invitation)
@@ -1159,12 +1394,15 @@ class BusinessService:
         # Once accepted, Staff is the source of truth; keep the roster record in step.
         staff = await self.db.get(Staff, invitation.staff_id) if invitation.staff_id else None
         fields = data.model_fields_set
+        if fields & {"takes_appointments", "front_desk_access"}:
+            await self._set_member_modes(invitation, staff, data)
         if "commission_percent" in fields:
             if data.commission_percent is None:
                 raise _validation_error("commissionPercent must be between 0 and 100")
-            invitation.commission_percent = data.commission_percent
-            if staff:
-                staff.commission_percent = data.commission_percent
+            if invitation.role != "front_desk":
+                invitation.commission_percent = data.commission_percent
+                if staff:
+                    staff.commission_percent = data.commission_percent
         if "working_days" in fields:
             invitation.working_days = self._normalise_days(data.working_days)
             if staff:
@@ -1174,22 +1412,82 @@ class BusinessService:
         await self.db.refresh(invitation)
         return team_member_response(invitation)
 
+    async def _set_member_modes(self, invitation: TeamInvitation, staff: Optional[Staff], data: UpdateTeamMemberRequest) -> None:
+        """What a member does: takes appointments (role staff), runs the front desk, or both."""
+        fields = data.model_fields_set
+        takes = invitation.role != "front_desk" if data.takes_appointments is None else data.takes_appointments
+        desk = invitation.front_desk_access if data.front_desk_access is None else data.front_desk_access
+        if "takes_appointments" in fields and data.takes_appointments is None or (
+            "front_desk_access" in fields and data.front_desk_access is None
+        ):
+            raise _validation_error("takesAppointments and frontDeskAccess must be true or false")
+        if not takes and not desk:
+            raise _validation_error("A team member must take appointments, run the front desk, or both")
+
+        role = "staff" if takes else "front_desk"
+        if role == "front_desk" and invitation.role != "front_desk" and staff is not None:
+            from app.modules.booking.models import Booking, BookingStatus
+            # Desk only means no appointments: theirs must be moved or cancelled first.
+            upcoming = (
+                await self.db.execute(
+                    select(func.count()).select_from(Booking).where(
+                        Booking.staff_id == staff.id,
+                        Booking.status.in_([BookingStatus.CONFIRMED, BookingStatus.IN_PROGRESS, BookingStatus.PENDING_PAYMENT]),
+                    )
+                )
+            ).scalar_one()
+            if upcoming:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "has_upcoming_bookings",
+                        "message": f"They still have {upcoming} upcoming appointment{'s' if upcoming != 1 else ''}; reassign or cancel them first",
+                        "count": upcoming,
+                    },
+                )
+
+        if role != invitation.role:
+            if role == "front_desk":
+                commission = None
+            else:
+                commission = DEFAULT_COMMISSION if data.commission_percent is None else data.commission_percent
+            invitation.commission_percent = commission
+            if staff:
+                staff.commission_percent = commission
+                if role == "front_desk":
+                    staff.performs_all_services = False
+                    await self.db.execute(delete(StaffService).where(StaffService.staff_id == staff.id))
+                else:
+                    # Bookable again: every service, until the owner narrows it.
+                    staff.performs_all_services = True
+        invitation.role = role
+        invitation.front_desk_access = role == "front_desk" or desk
+        if staff:
+            staff.role = role
+            staff.front_desk_access = invitation.front_desk_access
+
     async def remove_team_member(self, business_id: str, user_id: str, invitation_id: str) -> None:
         """Cancels a pending invitation, or removes an accepted member from the team."""
         business = await self._get_owned_business(business_id, user_id)
         invitation = await self._get_member(business, invitation_id)
 
         if invitation.staff_id:
-            await self.db.execute(
-                delete(Staff).where(Staff.business_id == business.id, Staff.id == invitation.staff_id)
-            )
+            leaving = Staff.id == invitation.staff_id
         elif invitation.status == InvitationStatus.ACCEPTED and invitation.user_id:
             # Accepted before invitations were linked to Staff (pre-006 rows the backfill missed).
-            await self.db.execute(
-                delete(Staff).where(Staff.business_id == business.id, Staff.user_id == invitation.user_id)
-            )
+            leaving = Staff.user_id == invitation.user_id
+        else:
+            leaving = None
+        keys = []
+        if leaving is not None:
+            staff_ids = list((await self.db.execute(select(Staff.id).where(Staff.business_id == business.id, leaving))).scalars())
+            # Their portfolio goes with them, files included.
+            keys = await self._delete_portfolio_files(staff_ids)
+            await self.db.execute(delete(Staff).where(Staff.business_id == business.id, leaving))
         await self.db.delete(invitation)
         await self.db.commit()
+        for key in keys:
+            await delete_stored_object.enqueue(key=key)
 
     async def _get_member(self, business: Business, invitation_id: str) -> TeamInvitation:
         invitation = await self.db.get(TeamInvitation, self._parse_path_id(invitation_id, "invitationId"))
@@ -1315,8 +1613,11 @@ class BusinessService:
             if business.id in seen:
                 continue
             seen.add(business.id)
+            desk = staff.role == "front_desk" or bool(staff.front_desk_access)
+            modes = (["staff"] if staff.role != "front_desk" else []) + (["front_desk"] if desk else [])
             items.append(MyBusinessResponse(
                 businessId=business.id, name=business.name, status=business.status, role=staff.role, staffId=staff.id,
+                frontDeskAccess=desk, modes=modes,
             ))
         return ListMyBusinessesResponse(businesses=items)
 
@@ -1387,14 +1688,14 @@ class BusinessService:
                     role=invitation.role,
                     specialties=[],
                     portfolio=[],
-                    # Front desk isn't bookable until the owner gives them services
-                    # (PUT /businesses/{id}/staff/{staffId}/services).
+                    # Desk-only members aren't bookable (no services, no commission).
                     performs_all_services=invitation.role != "front_desk",
                 )
                 self.db.add(staff)
             # Staff becomes this member's bookable identity (docs/booking/PLAN.md, D3).
             staff.working_days = invitation.working_days
-            staff.commission_percent = invitation.commission_percent
+            staff.commission_percent = None if invitation.role == "front_desk" else invitation.commission_percent
+            staff.front_desk_access = invitation.role == "front_desk" or bool(invitation.front_desk_access)
             invitation.staff_id = staff.id
         else:
             invitation.status = InvitationStatus.DECLINED
@@ -1543,6 +1844,7 @@ class BusinessService:
         # Customers only see people they could book: front desk is staff-facing only.
         staff_rows = sorted((st for st in business.staff or [] if st.role != "front_desk"), key=lambda st: st.created_at)
         mapped = await self.staff_service_ids([st.id for st in staff_rows if not st.performs_all_services])
+        portfolios = await self.staff_portfolio_urls([st.id for st in staff_rows])
         staff = [
             StaffMemberResponse(
                 staffId=st.id,
@@ -1555,7 +1857,8 @@ class BusinessService:
                 avatarUrl=st.avatar_url,
                 bio=st.bio or "",
                 specialties=st.specialties or [],
-                portfolio=st.portfolio or [],
+                # Uploaded photos (newest first), then any legacy list.
+                portfolio=portfolios.get(st.id, []) + (st.portfolio or []),
             )
             for st in staff_rows
         ]

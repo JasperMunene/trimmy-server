@@ -430,12 +430,15 @@ class BookingsService:
         return await self.get_response(booking.id)
 
     async def _can_manage(self, user: User, business_id: uuid_pkg.UUID) -> bool:
-        """The owner, or someone working there as front desk."""
+        """The owner, or someone working there with front desk access."""
         business = await self.db.get(Business, business_id)
         if business and business.owner_id == user.id:
             return True
         front_desk = await self.db.execute(
-            select(Staff.id).where(Staff.business_id == business_id, Staff.user_id == user.id, Staff.role == "front_desk")
+            select(Staff.id).where(
+                Staff.business_id == business_id, Staff.user_id == user.id,
+                or_(Staff.role == "front_desk", Staff.front_desk_access.is_(True)),
+            )
         )
         return front_desk.first() is not None
 
@@ -537,11 +540,11 @@ class BookingsService:
         latest_deposit: dict = {}
         latest_charge: dict = {}
         if bookings:
-            payments = await self.db.execute(
-                select(Payment).where(Payment.booking_id.in_([b.id for b in bookings])).order_by(Payment.created_at)
-            )
-            for p in payments.scalars():  # ordered, so the last of each kind wins
-                (latest_charge if p.kind == PaymentKind.CHARGE else latest_deposit)[p.booking_id] = p
+            from app.modules.payments.allocations import payment_parts
+
+            # Visit checkouts count for every booking they covered, not just the first.
+            for part in await payment_parts(self.db, [b.id for b in bookings]):  # oldest first: the last wins
+                (latest_charge if part.payment.kind == PaymentKind.CHARGE else latest_deposit)[part.booking_id] = part.payment
         responses = [
             self._response(
                 b, businesses.get(b.business_id), staff.get(b.staff_id), latest_deposit.get(b.id), latest_charge.get(b.id)
@@ -590,6 +593,7 @@ class BookingsService:
             depositAmount=Money(amount=booking.deposit_amount, currency=booking.currency) if booking.deposit_amount else None,
             status=booking.status,
             source=booking.source,
+            visitId=booking.visit_id,
             paymentStatus=booking.payment_status,
             expiresAt=_aware(booking.expires_at) if booking.expires_at else None,
             cancelReason=booking.cancel_reason,

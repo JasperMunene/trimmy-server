@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 import uuid as uuid_pkg
 
 from pydantic import BaseModel, Field
@@ -171,6 +171,8 @@ class BookingResponse(BaseModel):
     tip: Optional[Money] = None
     status: str
     source: str
+    # Set when this booking is one part of a multi-staff visit (GET /visits/{visitId}).
+    visit_id: Optional[uuid_pkg.UUID] = Field(None, alias="visitId")
     payment_status: str = Field(alias="paymentStatus")  # unpaid | deposit_paid | paid
     payment_method: Optional[str] = Field(None, alias="paymentMethod")
     payment_reference: Optional[str] = Field(None, alias="paymentReference")
@@ -223,6 +225,65 @@ class OwnerBookingRequest(BaseModel):
 class ScheduledBookingRequest(OwnerBookingRequest):
     date: date
     time: str = Field(..., pattern=r"^([01]\d|2[0-3]):[0-5]\d$", examples=["14:00"])
+
+
+# ─── Visits: one customer, several staff ─────────────────────
+
+class AddServiceRequest(BaseModel):
+    """Add a service to a customer's visit, done by someone (else): hair, then nails."""
+
+    services: List[BookingServiceRequest] = Field(..., min_length=1, max_length=10)
+    staff_id: uuid_pkg.UUID = Field(alias="staffId")
+    # now = starts straight away (alongside what they're having done); after = when the booking it's
+    # added to ends; at = a time today.
+    start: Literal["now", "after", "at"] = "now"
+    time: Optional[str] = Field(None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$", examples=["14:30"])
+    notes: Optional[str] = Field(None, max_length=500)
+
+    model_config = {"populate_by_name": True}
+
+
+class VisitStaffResponse(BaseModel):
+    staff_id: Optional[uuid_pkg.UUID] = Field(None, alias="staffId")
+    staff_name: str = Field(alias="staffName")
+    subtotal: Money
+    balance_due: Money = Field(alias="balanceDue")
+    booking_ids: List[uuid_pkg.UUID] = Field(alias="bookingIds")
+
+    model_config = {"populate_by_name": True}
+
+
+class VisitNotReadyResponse(BaseModel):
+    booking_id: uuid_pkg.UUID = Field(alias="bookingId")
+    status: str
+    staff_name: str = Field(alias="staffName")
+
+    model_config = {"populate_by_name": True}
+
+
+class VisitResponse(BaseModel):
+    """A customer's visit across several bookings (and staff), for checking out together."""
+
+    visit_id: uuid_pkg.UUID = Field(alias="visitId")
+    business_id: uuid_pkg.UUID = Field(alias="businessId")
+    customer_name: str = Field(alias="customerName")
+    customer_phone: Optional[str] = Field(None, alias="customerPhone")
+    # Soonest first. Cancelled and no-show bookings are listed but not counted in the totals.
+    bookings: List[BookingResponse]
+    # One row per person, with what their part of the visit comes to (for splitting a tip).
+    staff: List[VisitStaffResponse]
+    total: Money
+    deposit_paid: Money = Field(alias="depositPaid")
+    balance_due: Money = Field(alias="balanceDue")
+    payment_status: Literal["unpaid", "partially_paid", "paid"] = Field(alias="paymentStatus")
+    # Unpaid and started or done: what POST /visits/{id}/charge would take now.
+    chargeable_booking_ids: List[uuid_pkg.UUID] = Field(alias="chargeableBookingIds")
+    # Still to start: start them, cancel them, or charge the rest without them.
+    not_ready: List[VisitNotReadyResponse] = Field(alias="notReady")
+    # The latest visit checkout charge (null until one is started).
+    charge_payment: Optional[DepositPaymentResponse] = Field(None, alias="chargePayment")
+
+    model_config = {"populate_by_name": True}
 
 
 class UpdateBookingStatusRequest(BaseModel):

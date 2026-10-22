@@ -11,6 +11,7 @@ from app.modules.business.schemas import (
     BookingSettingsResponse,
     BusinessProfileResponse,
     CompletePhotoUploadRequest,
+    CompletePortfolioUploadRequest,
     CreateBusinessRequest,
     CreateBusinessResponse,
     CreateServiceCategoryRequest,
@@ -28,6 +29,8 @@ from app.modules.business.schemas import (
     PhotoUploadUrlRequest,
     PhotoUploadUrlResponse,
     PoliciesResponse,
+    PortfolioPhotoResponse,
+    PortfolioResponse,
     PublishBusinessRequest,
     PublishBusinessResponse,
     RespondToInvitationRequest,
@@ -336,6 +339,73 @@ async def set_staff_services(
     """Which services this staff member performs (drives availability and booking)."""
     service = BusinessService(db)
     return await service.set_staff_services(business_id, str(current_user.id), staff_id, data)
+
+
+# ─── Staff portfolio: the member themselves, or the owner ────
+
+
+@router.get("/{business_id}/staff/{staff_id}/portfolio", response_model=PortfolioResponse)
+async def get_portfolio(
+    business_id: str,
+    staff_id: str,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """A staff member's portfolio photos, newest first, for managing them."""
+    service = BusinessService(db)
+    return await service.get_portfolio(business_id, str(current_user.id), staff_id)
+
+
+@router.post("/{business_id}/staff/{staff_id}/portfolio/upload-url", response_model=PhotoUploadUrlResponse)
+async def create_portfolio_upload_url(
+    business_id: str,
+    staff_id: str,
+    data: PhotoUploadUrlRequest,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Step 1 of a direct upload: get a presigned URL, then PUT the file to it
+    with exactly the returned headers, then call POST /portfolio/complete."""
+    service = BusinessService(db)
+    return await service.create_portfolio_upload_url(business_id, str(current_user.id), staff_id, data)
+
+
+@router.post("/{business_id}/staff/{staff_id}/portfolio/complete", status_code=201, response_model=PortfolioPhotoResponse)
+async def complete_portfolio_upload(
+    business_id: str,
+    staff_id: str,
+    data: CompletePortfolioUploadRequest,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Step 2 of a direct upload: add the uploaded file to the portfolio."""
+    service = BusinessService(db)
+    return await service.complete_portfolio_upload(business_id, str(current_user.id), staff_id, data)
+
+
+@router.post("/{business_id}/staff/{staff_id}/portfolio", status_code=201, response_model=PortfolioPhotoResponse)
+async def upload_portfolio_photo(
+    business_id: str,
+    staff_id: str,
+    photo: UploadFile = File(...),
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload through the API (multipart). Prefer the direct upload-url flow."""
+    service = BusinessService(db)
+    return await service.upload_portfolio_photo(business_id, str(current_user.id), staff_id, photo)
+
+
+@router.delete("/{business_id}/staff/{staff_id}/portfolio/{photo_id}", status_code=204)
+async def delete_portfolio_photo(
+    business_id: str,
+    staff_id: str,
+    photo_id: str,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = BusinessService(db)
+    await service.delete_portfolio_photo(business_id, str(current_user.id), staff_id, photo_id)
 
 
 @router.get("/{business_id}/team/members", response_model=ListTeamMembersResponse)
