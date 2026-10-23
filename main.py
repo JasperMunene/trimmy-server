@@ -18,6 +18,7 @@ from app.workers.broker import publisher
 from app.modules.auth.router import router as auth_router
 from app.modules.admin.auth import router as admin_auth_router
 from app.modules.admin.router import router as admin_router
+from app.modules.admin.lookup import router as admin_lookup_router
 from app.modules.booking.router import availability_router, bookings_router, my_bookings_router, visits_router
 from app.modules.booking.time_off import router as time_off_router
 from app.modules.customers.router import router as customers_router
@@ -91,6 +92,7 @@ app.add_middleware(
 app.include_router(auth_router, prefix=settings.API_V1_STR)
 app.include_router(admin_auth_router, prefix=settings.API_V1_STR)
 app.include_router(admin_router, prefix=settings.API_V1_STR)
+app.include_router(admin_lookup_router, prefix=settings.API_V1_STR)
 # discovery_router must precede business_router: its GET /businesses/search
 # would otherwise match the authed GET /businesses/{business_id} route.
 app.include_router(discovery_router, prefix=settings.API_V1_STR)
