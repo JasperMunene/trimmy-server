@@ -359,6 +359,8 @@ class TeamMemberResponse(BaseModel):
     # Null for desk-only members: they perform no services.
     commission_percent: Optional[int] = Field(None, alias="commissionPercent")
     front_desk_access: bool = Field(False, alias="frontDeskAccess")
+    # Their profile picture once they've joined (null: initials).
+    avatar_url: Optional[str] = Field(None, alias="avatarUrl")
     working_days: Optional[List[str]] = Field(None, alias="workingDays")
     sent_at: datetime = Field(alias="sentAt")
 

@@ -124,6 +124,40 @@ class CustomersService:
         ).scalars().all()
         return ListCustomersResponse(customers=await self._with_stats(bid, rows), total=total)
 
+    async def _avatars(self, customers: list[BusinessCustomer]) -> dict:
+        """customer id -> profile picture of the account their contact details prove (the same rule
+        as linking bookings, customer_match.py): a verified phone first, then a verified email.
+        Two queries for the whole page."""
+        from app.modules.auth.models import AuthType, User
+
+        phones = {c.phone for c in customers if c.phone}
+        emails = {c.email.strip().lower() for c in customers if c.email}
+        by_phone: dict = {}
+        by_email: dict = {}
+        if phones:
+            rows = await self.db.execute(
+                select(User.phone, User.avatar_url).where(
+                    User.phone.in_(phones), User.phone_verified_at.is_not(None), User.avatar_url.is_not(None)
+                )
+            )
+            by_phone = dict(rows.all())
+        if emails:
+            rows = await self.db.execute(
+                select(func.lower(User.email), User.avatar_url).where(
+                    func.lower(User.email).in_(emails), User.verified.is_(True), User.avatar_url.is_not(None),
+                    User.auth_type.in_([AuthType.EMAIL, AuthType.GOOGLE]),
+                )
+            )
+            by_email = dict(rows.all())
+        out = {}
+        for c in customers:
+            url = by_phone.get(c.phone) if c.phone else None
+            if url is None and c.email:
+                url = by_email.get(c.email.strip().lower())
+            if url:
+                out[c.id] = url
+        return out
+
     async def _with_stats(self, business_id: uuid_pkg.UUID, customers: list[BusinessCustomer]) -> list[CustomerResponse]:
         phones = [c.phone for c in customers if c.phone]
         stats: dict = {}
@@ -136,6 +170,8 @@ class CustomersService:
             )
             stats = {phone: (count, last) for phone, count, last in rows.all()}
 
+        avatars = await self._avatars(customers)
+
         def aware(dt: Optional[datetime]) -> Optional[datetime]:
             if dt is None:
                 return None
@@ -146,6 +182,7 @@ class CustomersService:
         return [
             CustomerResponse(
                 customerId=c.id, businessId=c.business_id, name=c.name, phone=c.phone, email=c.email,
+                avatarUrl=avatars.get(c.id),
                 createdAt=aware(c.created_at),
                 bookingsCount=stats.get(c.phone, (0, None))[0],
                 lastBookingAt=aware(stats.get(c.phone, (0, None))[1]),

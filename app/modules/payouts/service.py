@@ -21,9 +21,10 @@ def _aware(dt: Optional[datetime]) -> Optional[datetime]:
     return None if dt is None else (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc))
 
 
-def _response(p: Payout) -> PayoutResponse:
+def _response(p: Payout, avatar_url: Optional[str] = None) -> PayoutResponse:
     return PayoutResponse(
-        payoutId=p.id, businessId=p.business_id, staffId=p.staff_id, staffName=p.staff_name, amount=p.amount,
+        payoutId=p.id, businessId=p.business_id, staffId=p.staff_id, staffName=p.staff_name,
+        staffAvatarUrl=avatar_url, amount=p.amount,
         currency=p.currency, status=p.status, requestedAt=_aware(p.requested_at), respondedAt=_aware(p.responded_at),
         rejectionReason=p.rejection_reason,
     )
@@ -33,6 +34,10 @@ class PayoutsService:
     def __init__(self, db: AsyncSession, now: Optional[datetime] = None):
         self.db = db
         self.now = now or datetime.now(timezone.utc)
+
+    async def _avatar(self, staff_id) -> Optional[str]:
+        staff = await self.db.get(Staff, staff_id) if staff_id else None
+        return staff.avatar_url if staff else None
 
     # ─── who is asking ───────────────────────────────────────
 
@@ -106,7 +111,7 @@ class PayoutsService:
                 business.owner_id, "Payout request", f"{me.name} requested KES {amount:,} from their wallet.",
                 type="payout_requested", payoutId=payout.id, businessId=business_id,
             )
-        return _response(payout)
+        return _response(payout, await self._avatar(payout.staff_id))
 
     async def list_for_business(
         self, user: User, business_id: str, status: Optional[str], staff_id: Optional[uuid_pkg.UUID]
@@ -128,7 +133,11 @@ class PayoutsService:
             if status not in {s.value for s in PayoutStatus}:
                 raise _error(400, "validation_error", "status must be pending, paid or rejected")
             query = query.where(Payout.status == status)
-        return ListPayoutsResponse(payouts=[_response(p) for p in (await self.db.execute(query)).scalars()])
+        from app.modules.business.service import staff_avatar_map
+
+        payouts = (await self.db.execute(query)).scalars().all()
+        avatars = await staff_avatar_map(self.db, [p.staff_id for p in payouts])
+        return ListPayoutsResponse(payouts=[_response(p, avatars.get(p.staff_id)) for p in payouts])
 
     async def get(self, user: User, payout_id: str) -> PayoutResponse:
         """One payout: for its business's owner, or the staff member who asked. 404 for anyone else."""
@@ -141,7 +150,7 @@ class PayoutsService:
         role, me = await self._business_role(user, payout.business_id)
         if role != OWNER and (me is None or me.id != payout.staff_id):
             raise not_found
-        return _response(payout)
+        return _response(payout, await self._avatar(payout.staff_id))
 
     async def respond(self, user: User, payout_id: str, action: str, rejection_reason: Optional[str]) -> PayoutResponse:
         """Owner only. approve = "I've paid them myself"; no money moves through Trimmy."""
@@ -171,4 +180,4 @@ class PayoutsService:
                 f"KES {payout.amount:,} " + ("marked as paid by the owner." if approved else f"not approved{': ' + payout.rejection_reason if payout.rejection_reason else '.'}"),
                 type="payout_responded", payoutId=payout.id, businessId=payout.business_id,
             )
-        return _response(payout)
+        return _response(payout, await self._avatar(payout.staff_id))

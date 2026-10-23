@@ -27,6 +27,7 @@ class PayoutResponse(BaseModel):
     business_id: uuid_pkg.UUID = Field(alias="businessId")
     staff_id: Optional[uuid_pkg.UUID] = Field(None, alias="staffId")
     staff_name: str = Field(alias="staffName")
+    staff_avatar_url: Optional[str] = Field(None, alias="staffAvatarUrl")
     amount: int
     currency: str
     status: str  # pending | paid | rejected
@@ -99,6 +100,7 @@ class AdjustmentResponse(BaseModel):
     business_id: uuid_pkg.UUID = Field(alias="businessId")
     staff_id: Optional[uuid_pkg.UUID] = Field(None, alias="staffId")
     staff_name: str = Field(alias="staffName")
+    staff_avatar_url: Optional[str] = Field(None, alias="staffAvatarUrl")
     kind: str
     amount: int  # positive; the kind gives the direction
     signed_amount: int = Field(alias="signedAmount")

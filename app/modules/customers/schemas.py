@@ -21,6 +21,8 @@ class CustomerResponse(BaseModel):
     name: str
     phone: Optional[str] = None  # E.164
     email: Optional[str] = None
+    # Their Trimmy profile picture, when the phone (verified) or email matches an account.
+    avatar_url: Optional[str] = Field(None, alias="avatarUrl")
     created_at: datetime = Field(alias="createdAt")
     # From the business's bookings with this phone (cancelled ones excluded).
     bookings_count: int = Field(0, alias="bookingsCount")

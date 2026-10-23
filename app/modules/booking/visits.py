@@ -67,7 +67,9 @@ class VisitsService:
 
         per_staff: dict = {}
         for r in counted:
-            row = per_staff.setdefault(r.staff_id, {"name": r.staff_name, "subtotal": 0, "due": 0, "ids": []})
+            row = per_staff.setdefault(
+                r.staff_id, {"name": r.staff_name, "avatar": r.staff_avatar_url, "subtotal": 0, "due": 0, "ids": []}
+            )
             row["subtotal"] += r.total_amount.amount
             row["due"] += r.balance_due.amount if r.balance_due else 0
             row["ids"].append(r.booking_id)
@@ -86,7 +88,7 @@ class VisitsService:
             bookings=responses,
             staff=[
                 VisitStaffResponse(
-                    staffId=staff_id, staffName=row["name"],
+                    staffId=staff_id, staffName=row["name"], staffAvatarUrl=row["avatar"],
                     subtotal=Money(amount=row["subtotal"], currency=currency),
                     balanceDue=Money(amount=row["due"], currency=currency),
                     bookingIds=row["ids"],

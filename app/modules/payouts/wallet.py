@@ -39,9 +39,10 @@ def _aware(dt: Optional[datetime]) -> Optional[datetime]:
     return None if dt is None else (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc))
 
 
-def adjustment_response(a: WalletAdjustment) -> AdjustmentResponse:
+def adjustment_response(a: WalletAdjustment, avatar_url: Optional[str] = None) -> AdjustmentResponse:
     return AdjustmentResponse(
-        adjustmentId=a.id, businessId=a.business_id, staffId=a.staff_id, staffName=a.staff_name, kind=a.kind,
+        adjustmentId=a.id, businessId=a.business_id, staffId=a.staff_id, staffName=a.staff_name,
+        staffAvatarUrl=avatar_url, kind=a.kind,
         amount=a.amount, signedAmount=a.signed_amount, currency=a.currency, note=a.note, bookingId=a.booking_id,
         createdAt=_aware(a.created_at), voidedAt=_aware(a.voided_at),
     )

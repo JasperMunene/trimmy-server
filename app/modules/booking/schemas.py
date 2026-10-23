@@ -158,6 +158,9 @@ class BookingResponse(BaseModel):
     customer_has_account: bool = Field(False, alias="customerHasAccount")
     staff_id: Optional[uuid_pkg.UUID] = Field(None, alias="staffId")
     staff_name: str = Field(alias="staffName")  # "Any available" while unassigned
+    staff_avatar_url: Optional[str] = Field(None, alias="staffAvatarUrl")
+    # The customer's profile picture, when the booking is linked to their account.
+    customer_avatar_url: Optional[str] = Field(None, alias="customerAvatarUrl")
     services: List[BookingLineResponse]
     date: date
     time: str
@@ -246,6 +249,7 @@ class AddServiceRequest(BaseModel):
 class VisitStaffResponse(BaseModel):
     staff_id: Optional[uuid_pkg.UUID] = Field(None, alias="staffId")
     staff_name: str = Field(alias="staffName")
+    staff_avatar_url: Optional[str] = Field(None, alias="staffAvatarUrl")
     subtotal: Money
     balance_due: Money = Field(alias="balanceDue")
     booking_ids: List[uuid_pkg.UUID] = Field(alias="bookingIds")

@@ -281,7 +281,16 @@ def business_summary(biz: Business, distance_km: float = 0.0) -> BusinessSummary
 DEFAULT_COMMISSION = 40
 
 
-def team_member_response(inv: TeamInvitation) -> TeamMemberResponse:
+async def staff_avatar_map(db: AsyncSession, staff_ids) -> dict:
+    """staff id -> profile picture (the person's own, mirrored onto Staff), in one query."""
+    ids = [i for i in set(staff_ids) if i]
+    if not ids:
+        return {}
+    rows = await db.execute(select(Staff.id, Staff.avatar_url).where(Staff.id.in_(ids)))
+    return {sid: url for sid, url in rows.all()}
+
+
+def team_member_response(inv: TeamInvitation, avatar_url: Optional[str] = None) -> TeamMemberResponse:
     return TeamMemberResponse(
         invitationId=inv.id,
         businessId=inv.business_id,
@@ -293,6 +302,7 @@ def team_member_response(inv: TeamInvitation) -> TeamMemberResponse:
         status=inv.status,
         commissionPercent=inv.commission_percent,
         frontDeskAccess=bool(inv.front_desk_access),
+        avatarUrl=avatar_url,
         workingDays=inv.working_days,
         sentAt=inv.sent_at,
     )
@@ -1369,7 +1379,9 @@ class BusinessService:
             )
             .order_by(TeamInvitation.sent_at)
         )
-        return ListTeamMembersResponse(members=[team_member_response(i) for i in result.scalars()])
+        invitations = result.scalars().all()
+        avatars = await staff_avatar_map(self.db, [i.staff_id for i in invitations])
+        return ListTeamMembersResponse(members=[team_member_response(i, avatars.get(i.staff_id)) for i in invitations])
 
     async def add_team_member(self, business_id: str, user_id: str, data: AddTeamMemberRequest) -> TeamMemberResponse:
         business = await self._get_owned_business(business_id, user_id)
@@ -1410,7 +1422,7 @@ class BusinessService:
 
         await self.db.commit()
         await self.db.refresh(invitation)
-        return team_member_response(invitation)
+        return team_member_response(invitation, staff.avatar_url if staff else None)
 
     async def _set_member_modes(self, invitation: TeamInvitation, staff: Optional[Staff], data: UpdateTeamMemberRequest) -> None:
         """What a member does: takes appointments (role staff), runs the front desk, or both."""
