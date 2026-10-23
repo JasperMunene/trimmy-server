@@ -119,7 +119,7 @@ class AvailabilityService:
         business = (
             await self.db.execute(
                 select(Business)
-                .where(Business.id == bid, *(() if for_existing_booking else (Business.status == BusinessStatus.PUBLISHED,)))
+                .where(Business.id == bid, *(() if for_existing_booking else (Business.status == BusinessStatus.PUBLISHED, Business.suspended_at.is_(None))))
                 .options(
                     selectinload(Business.working_hours),
                     selectinload(Business.staff),

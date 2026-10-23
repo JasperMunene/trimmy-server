@@ -64,7 +64,7 @@ async def list_favorites(current_user: User = Depends(get_current_user), db: Asy
             select(Staff, Business.name)
             .join(FavoriteStaff, FavoriteStaff.staff_id == Staff.id)
             .join(Business, Business.id == Staff.business_id)
-            .where(FavoriteStaff.user_id == current_user.id, Business.status == BusinessStatus.PUBLISHED,
+            .where(FavoriteStaff.user_id == current_user.id, Business.status == BusinessStatus.PUBLISHED, Business.suspended_at.is_(None),
                    Staff.role != "front_desk")
             .order_by(FavoriteStaff.created_at.desc())
         )
@@ -83,7 +83,7 @@ async def list_favorites(current_user: User = Depends(get_current_user), db: Asy
 async def save_business(business_id: str, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Idempotent."""
     bid = _uuid(business_id, "business")
-    if (await db.execute(select(Business.id).where(Business.id == bid, Business.status == BusinessStatus.PUBLISHED))).first() is None:
+    if (await db.execute(select(Business.id).where(Business.id == bid, Business.status == BusinessStatus.PUBLISHED, Business.suspended_at.is_(None)))).first() is None:
         raise _not_found("business")
     if await db.get(FavoriteBusiness, (current_user.id, bid)) is None:
         db.add(FavoriteBusiness(user_id=current_user.id, business_id=bid))
@@ -106,7 +106,7 @@ async def save_staff(staff_id: str, current_user: User = Depends(get_current_use
     sid = _uuid(staff_id, "staff member")
     found = await db.execute(
         select(Staff.id).join(Business, Business.id == Staff.business_id)
-        .where(Staff.id == sid, Business.status == BusinessStatus.PUBLISHED, Staff.role != "front_desk")
+        .where(Staff.id == sid, Business.status == BusinessStatus.PUBLISHED, Business.suspended_at.is_(None), Staff.role != "front_desk")
     )
     if found.first() is None:
         raise _not_found("staff member")

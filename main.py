@@ -21,6 +21,8 @@ from app.modules.admin.router import router as admin_router
 from app.modules.admin.lookup import router as admin_lookup_router
 from app.modules.support.router import router as support_router
 from app.modules.support.admin import router as admin_support_router
+from app.modules.safety.router import router as reports_router
+from app.modules.safety.admin import router as admin_safety_router
 from app.modules.booking.router import availability_router, bookings_router, my_bookings_router, visits_router
 from app.modules.booking.time_off import router as time_off_router
 from app.modules.customers.router import router as customers_router
@@ -97,6 +99,8 @@ app.include_router(admin_router, prefix=settings.API_V1_STR)
 app.include_router(admin_lookup_router, prefix=settings.API_V1_STR)
 app.include_router(support_router, prefix=settings.API_V1_STR)
 app.include_router(admin_support_router, prefix=settings.API_V1_STR)
+app.include_router(reports_router, prefix=settings.API_V1_STR)
+app.include_router(admin_safety_router, prefix=settings.API_V1_STR)
 # discovery_router must precede business_router: its GET /businesses/search
 # would otherwise match the authed GET /businesses/{business_id} route.
 app.include_router(discovery_router, prefix=settings.API_V1_STR)

@@ -344,9 +344,9 @@ async def test_my_businesses(client, test_user, auth_headers, db_session):
         select(Staff.id).where(Staff.business_id == work.id, Staff.user_id == test_user.id))).scalar_one()
     assert response.json() == {"businesses": [
         {"businessId": str(mine.id), "name": "Fade Studio", "status": "published", "role": "owner", "staffId": str(owner_staff),
-         "frontDeskAccess": False, "modes": []},
+         "frontDeskAccess": False, "modes": [], "suspendedAt": None, "suspendedReason": None},
         {"businessId": str(work.id), "name": "Cuts Co", "status": "published", "role": "front_desk", "staffId": str(desk_staff),
-         "frontDeskAccess": True, "modes": ["front_desk"]},
+         "frontDeskAccess": True, "modes": ["front_desk"], "suspendedAt": None, "suspendedReason": None},
     ]}
 
 

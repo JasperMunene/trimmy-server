@@ -85,7 +85,9 @@ def author_name(booking: Booking, user: User) -> str:
 
 async def refresh_staff_rating(db: AsyncSession, staff_id: uuid_pkg.UUID) -> None:
     """Staff.rating = the average of their reviews, one decimal (the business's is worked out on read)."""
-    avg = (await db.execute(select(func.avg(Review.rating)).where(Review.staff_id == staff_id))).scalar_one()
+    avg = (await db.execute(
+        select(func.avg(Review.rating)).where(Review.staff_id == staff_id, Review.hidden_at.is_(None))
+    )).scalar_one()
     staff = await db.get(Staff, staff_id)
     if staff is not None:
         staff.rating = round(float(avg), 1) if avg is not None else 0.0
@@ -141,7 +143,7 @@ class ReviewsService:
             raise _error(404, "not_found", "No business found for this id")
         if await self.db.get(Business, bid) is None:
             raise _error(404, "not_found", "No business found for this id")
-        where = [Review.business_id == bid]
+        where = [Review.business_id == bid, Review.hidden_at.is_(None)]  # hidden by Trimmy's team: never public
         if sid:
             where.append(Review.staff_id == sid)
         if unreplied:

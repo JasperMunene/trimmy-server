@@ -353,6 +353,7 @@ async def business_rows(db: AsyncSession, businesses: list[Business]) -> list[Bu
             destinationType=_val(kind),
             destinationStatus=_val(check),
             createdAt=b.created_at, publishedAt=b.published_at,
+            suspendedAt=b.suspended_at, suspendedReason=b.suspended_reason,
         ))
     return rows
 
@@ -436,6 +437,7 @@ async def business_detail(business_id: str, admin: User = Depends(require_admin)
             "type": kind, "label": destination_label(kind, number, account), "bankName": destination.bank_name,
             "verificationStatus": _val(destination.verification_status),
             "since": destination.created_at.isoformat() if destination.created_at else None,
+            "reviewedAt": destination.reviewed_at.isoformat() if destination.reviewed_at else None,
         }
 
     return BusinessDetail(
@@ -544,8 +546,9 @@ async def booking_detail(booking_id: str, admin: User = Depends(require_admin), 
                                 actorName=actors.get(e.actor_id, "Customer or system") if e.actor_id else "System",
                                 reason=e.reason, at=e.at) for e in events],
         payments=[payment_row(p) for p in payments],
-        review={"rating": review.rating, "text": review.text, "authorName": review.author_name,
-                "createdAt": review.created_at.isoformat(), "replyText": review.reply_text} if review else None,
+        review={"id": str(review.id), "rating": review.rating, "text": review.text, "authorName": review.author_name,
+                "createdAt": review.created_at.isoformat(), "replyText": review.reply_text,
+                "hiddenAt": review.hidden_at.isoformat() if review.hidden_at else None} if review else None,
         audit=await _audit_for(db, "booking", booking.id),
     )
 

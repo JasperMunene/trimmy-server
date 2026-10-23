@@ -189,6 +189,8 @@ class BusinessRow(BaseModel):
     destinationStatus: Optional[str]
     createdAt: datetime
     publishedAt: Optional[datetime]
+    suspendedAt: Optional[datetime] = None
+    suspendedReason: Optional[str] = None
 
 
 class BusinessPage(BaseModel):
