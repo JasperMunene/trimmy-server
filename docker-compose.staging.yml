@@ -39,6 +39,8 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # Capped, and only keys with a TTL (the read cache) can be evicted when full.
+    command: redis-server --maxmemory 128mb --maxmemory-policy volatile-lru
     ports:
       - "127.0.0.1:26381:6379" # this host only (no password); the app reaches it as redis:6379
     volumes:

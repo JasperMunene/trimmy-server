@@ -6,14 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
 from app.core.dependencies import get_current_user
 from app.modules.auth.models import User
-from app.modules.business.models import Business, BusinessStatus, ServiceCategory, Staff
+from app.modules.business.models import Business, BusinessStatus, Staff
 from app.modules.business.schemas import BusinessSummaryResponse
-from app.modules.business.service import business_summary
+from app.modules.business.cards import cached_cards, card_summary
 from app.modules.favorites.models import FavoriteBusiness, FavoriteStaff
 
 router = APIRouter(prefix="/me/favorites", tags=["Favorites"])
@@ -50,19 +49,16 @@ def _uuid(raw: str, what: str) -> uuid_pkg.UUID:
 @router.get("", response_model=FavoritesResponse)
 async def list_favorites(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Newest saved first. Businesses that are no longer published (and their staff) are left out."""
-    businesses = (
+    saved = (
         await db.execute(
-            select(Business)
-            .join(FavoriteBusiness, FavoriteBusiness.business_id == Business.id)
-            .where(FavoriteBusiness.user_id == current_user.id, Business.status == BusinessStatus.PUBLISHED)
+            select(FavoriteBusiness.business_id)
+            .where(FavoriteBusiness.user_id == current_user.id)
             .order_by(FavoriteBusiness.created_at.desc())
-            .options(
-                selectinload(Business.photos),
-                selectinload(Business.service_categories).selectinload(ServiceCategory.services),
-                selectinload(Business.reviews),
-            )
         )
     ).scalars().all()
+    # Only published businesses have cards (from the shared cache); keep the saved order.
+    cards = {c["id"]: c for c in await cached_cards(db)} if saved else {}
+    businesses = [cards[str(bid)] for bid in saved if str(bid) in cards]
     staff = (
         await db.execute(
             select(Staff, Business.name)
@@ -74,7 +70,7 @@ async def list_favorites(current_user: User = Depends(get_current_user), db: Asy
         )
     ).all()
     return FavoritesResponse(
-        businesses=[business_summary(b) for b in businesses],
+        businesses=[card_summary(c) for c in businesses],
         staff=[
             FavoriteStaffResponse(staffId=s.id, name=s.name, businessId=s.business_id, businessName=name,
                                   avatarUrl=s.avatar_url, role=s.role, rating=s.rating or 0.0)

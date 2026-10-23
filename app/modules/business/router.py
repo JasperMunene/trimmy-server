@@ -1,7 +1,11 @@
+import uuid as uuid_pkg
 from typing import Optional
 from fastapi import APIRouter, Depends, UploadFile, File, Form, Query
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import cache
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.dependencies import get_current_user, get_current_verified_user
 from app.modules.auth.models import User
@@ -81,6 +85,8 @@ async def search_businesses(
     priceMax: Optional[int] = None,
     ratingMin: Optional[float] = None,
     radiusKm: Optional[float] = None,
+    limit: Optional[int] = Query(None, ge=1, le=100, description="Page size; omit for every match"),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
     service = BusinessService(db)
@@ -92,6 +98,8 @@ async def search_businesses(
         price_max=priceMax,
         rating_min=ratingMin,
         radius_km=radiusKm,
+        limit=limit,
+        offset=offset,
     )
 
 
@@ -100,8 +108,17 @@ async def get_business_profile(
     business_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    service = BusinessService(db)
-    return await service.get_business_profile(business_id)
+    """Served from the shared cache when it's there (cleared when the business changes)."""
+    try:
+        key = cache.profile_key(await cache.generation(), str(uuid_pkg.UUID(business_id)))
+    except ValueError:
+        key = None  # not an id: the service answers 404
+    if key and (hit := await cache.get(key)) is not None:
+        return JSONResponse(hit)
+    profile = (await BusinessService(db).get_business_profile(business_id)).model_dump(mode="json", by_alias=True)
+    if key:
+        await cache.put(key, profile, settings.CACHE_PROFILE_SECONDS)
+    return JSONResponse(profile)
 
 
 @router.post("", status_code=201, response_model=CreateBusinessResponse)

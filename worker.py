@@ -10,6 +10,7 @@ import asyncio
 import logging
 import sys
 
+from app.core import cache_invalidation  # noqa: F401  (clears cached discovery data on commit)
 from app.core.config import settings
 from app.workers.broker import QUEUES
 from app.workers.beat import Beat
