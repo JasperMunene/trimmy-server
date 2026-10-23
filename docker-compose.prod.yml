@@ -31,13 +31,16 @@ x-app-env: &app-env
   EXPO_ACCESS_TOKEN: ${EXPO_ACCESS_TOKEN:-}
   # Push stays off until EAS/APNs/FCM are set up; tokens are collected meanwhile.
   NOTIFY_PUSH_ENABLED: ${NOTIFY_PUSH_ENABLED:-false}
+  # nginx on the host reaches the app through Docker's bridge gateway (172.16.0.0/12): trust its
+  # X-Forwarded-For so rate limits see each client's real IP. Direct traffic keeps its own IP.
+  FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-172.16.0.0/12,127.0.0.1}
 
 services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
     ports:
-      - "6383:6379"
+      - "127.0.0.1:6383:6379" # this host only: Redis has no password
     volumes:
       - redis_data:/data
     healthcheck:

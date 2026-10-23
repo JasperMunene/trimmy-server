@@ -111,9 +111,16 @@ class Settings(BaseSettings):
     ]
     GOOGLE_MOBILE_REDIRECT_URL: str = "trimmy://auth/google"
 
-    RATE_LIMIT_LOGIN: str = "5/minute"
-    RATE_LIMIT_REGISTER: str = "3/minute"
+    # Per client IP. Kept loose enough for many phones behind one carrier IP (CGNAT) or salon
+    # Wi-Fi; guessing one account's password is stopped by LOGIN_MAX_FAILURES instead.
+    RATE_LIMIT_LOGIN: str = "20/minute"
+    RATE_LIMIT_REGISTER: str = "10/minute"
     RATE_LIMIT_CHECK_EMAIL: str = "10/minute"
+    # Wrong passwords for one email before login is refused for the rest of the window.
+    LOGIN_MAX_FAILURES: str = "10/15minutes"
+    # Where the counts live, shared by every API process. Empty: REDIS_URL. memory:// for tests.
+    # Redis down: each process counts on its own until it's back.
+    RATE_LIMIT_STORAGE: str = ""
 
     OTP_MAX_ATTEMPTS: int = 5
     OTP_RESEND_COOLDOWN_SECONDS: int = 60
