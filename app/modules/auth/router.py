@@ -48,7 +48,8 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
 @router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
-async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit(settings.RATE_LIMIT_REGISTER)
+async def register(request: Request, data: RegisterRequest, db: AsyncSession = Depends(get_db)):
     service = AuthService(db)
     return await service.register(data)
 
@@ -63,8 +64,9 @@ async def request_email_otp(
 
 
 @router.post("/complete-registration", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit(settings.RATE_LIMIT_REGISTER)
 async def complete_registration(
-    data: CompleteRegistrationRequest, db: AsyncSession = Depends(get_db)
+    request: Request, data: CompleteRegistrationRequest, db: AsyncSession = Depends(get_db)
 ):
     service = AuthService(db)
     return await service.complete_registration(data)
@@ -80,8 +82,9 @@ async def request_phone_otp(
 
 
 @router.post("/complete-phone-registration", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit(settings.RATE_LIMIT_REGISTER)
 async def complete_phone_registration(
-    data: CompletePhoneRegistrationRequest, db: AsyncSession = Depends(get_db)
+    request: Request, data: CompletePhoneRegistrationRequest, db: AsyncSession = Depends(get_db)
 ):
     service = AuthService(db)
     return await service.complete_phone_registration(data)
@@ -89,7 +92,8 @@ async def complete_phone_registration(
 
 
 @router.post("/login", response_model=AuthResponse)
-async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit(settings.RATE_LIMIT_LOGIN)
+async def login(request: Request, data: LoginRequest, db: AsyncSession = Depends(get_db)):
     service = AuthService(db)
     return await service.login(data)
 
@@ -112,7 +116,8 @@ async def logout(
 
 
 @router.post("/verify-email", response_model=AuthResponse)
-async def verify_email(data: VerifyEmailRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit(settings.RATE_LIMIT_CHECK_EMAIL)
+async def verify_email(request: Request, data: VerifyEmailRequest, db: AsyncSession = Depends(get_db)):
     service = AuthService(db)
     return await service.verify_email(data)
 
@@ -187,25 +192,29 @@ async def check_email(request: Request, data: CheckEmailRequest, db: AsyncSessio
 
 
 @router.post("/forgot-password", response_model=MessageResponse)
-async def forgot_password(data: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit(settings.RATE_LIMIT_CHECK_EMAIL)
+async def forgot_password(request: Request, data: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
     service = AuthService(db)
     return await service.forgot_password(data)
 
 
 @router.post("/verify-reset-otp", response_model=VerifyResetOtpResponse)
-async def verify_reset_otp(data: VerifyResetOtpRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit(settings.RATE_LIMIT_CHECK_EMAIL)
+async def verify_reset_otp(request: Request, data: VerifyResetOtpRequest, db: AsyncSession = Depends(get_db)):
     service = AuthService(db)
     return await service.verify_reset_otp(data)
 
 
 @router.post("/reset-password", response_model=MessageResponse)
-async def reset_password(data: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit(settings.RATE_LIMIT_CHECK_EMAIL)
+async def reset_password(request: Request, data: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
     service = AuthService(db)
     return await service.reset_password(data)
 
 
 @router.post("/resend-otp", response_model=MessageResponse)
-async def resend_otp(data: ResendOtpRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit(settings.RATE_LIMIT_CHECK_EMAIL)
+async def resend_otp(request: Request, data: ResendOtpRequest, db: AsyncSession = Depends(get_db)):
     service = AuthService(db)
     return await service.resend_otp(data)
 
@@ -263,5 +272,6 @@ async def google_authorized(
 
 
 @router.post("/google/exchange", response_model=AuthResponse)
-async def google_exchange(data: GoogleExchangeRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit(settings.RATE_LIMIT_LOGIN)
+async def google_exchange(request: Request, data: GoogleExchangeRequest, db: AsyncSession = Depends(get_db)):
     return await GoogleAuthService(db).exchange(data.code, data.code_verifier)

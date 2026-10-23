@@ -13,6 +13,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.rate_limit import clear_login_failures, login_locked, record_login_failure
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -286,10 +287,20 @@ class AuthService:
 
 
     async def login(self, data: LoginRequest) -> AuthResponse:
+        if login_locked(data.email):
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "too_many_attempts",
+                    "message": "Too many wrong passwords. Try again in a few minutes, or reset your password.",
+                },
+            )
         user = await self._get_user_by_email(data.email)
 
         if not user or not user.password_hash or not verify_password(data.password, user.password_hash):
+            record_login_failure(data.email)
             raise _invalid_credentials(401, "Invalid email or password")
+        clear_login_failures(data.email)
 
         if not user.verified:
             # Only replace the code if we're allowed to send a new one; otherwise
