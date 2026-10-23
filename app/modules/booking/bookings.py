@@ -545,9 +545,14 @@ class BookingsService:
             # Visit checkouts count for every booking they covered, not just the first.
             for part in await payment_parts(self.db, [b.id for b in bookings]):  # oldest first: the last wins
                 (latest_charge if part.payment.kind == PaymentKind.CHARGE else latest_deposit)[part.booking_id] = part.payment
+        customer_ids = {b.customer_id for b in bookings if b.customer_id}
+        avatars = dict(
+            (await self.db.execute(select(User.id, User.avatar_url).where(User.id.in_(customer_ids)))).all()
+        ) if customer_ids else {}
         responses = [
             self._response(
-                b, businesses.get(b.business_id), staff.get(b.staff_id), latest_deposit.get(b.id), latest_charge.get(b.id)
+                b, businesses.get(b.business_id), staff.get(b.staff_id), latest_deposit.get(b.id), latest_charge.get(b.id),
+                customer_avatar=avatars.get(b.customer_id),
             )
             for b in bookings
         ]
@@ -562,6 +567,7 @@ class BookingsService:
         staff: Optional[Staff],
         deposit: Optional[Payment] = None,
         charge: Optional[Payment] = None,
+        customer_avatar: Optional[str] = None,
     ) -> BookingResponse:
         tz = ZoneInfo(business.timezone) if business else timezone.utc
         return BookingResponse(
@@ -575,6 +581,8 @@ class BookingsService:
             customerHasAccount=booking.customer_id is not None,
             staffId=booking.staff_id,
             staffName=staff.name if staff else ANY_STAFF_NAME,
+            staffAvatarUrl=staff.avatar_url if staff else None,
+            customerAvatarUrl=customer_avatar,
             services=[
                 BookingLineResponse(
                     serviceId=line.service_id,

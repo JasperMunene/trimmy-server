@@ -205,3 +205,19 @@ async def test_only_the_owner_changes_roles(client, auth_headers, member):
     resp = await client.patch(url, json={"takesAppointments": False, "commissionPercent": 90}, headers=member_headers)
     assert resp.status_code == 404
     assert (await _roster(client, auth_headers, biz_id))["role"] == "staff"
+
+
+@pytest.mark.asyncio
+async def test_renaming_yourself_renames_you_on_every_team(client, auth_headers, member, db_session):
+    user, member_headers = member
+    biz_id = await _business(client, auth_headers)
+    await _invite_and_accept(client, auth_headers, member_headers, biz_id)
+    roster = await _roster(client, auth_headers, biz_id)
+
+    resp = await client.patch("/api/v1/auth/me", json={"first_name": "Wanjiru", "last_name": "Kamau"}, headers=member_headers)
+    assert resp.status_code == 200, resp.text
+
+    db_session.expire_all()
+    staff = await db_session.get(Staff, uuid.UUID(roster["staffId"]))
+    assert staff.name == "Wanjiru Kamau"  # calendar columns, bookings, the public profile
+    assert (await _roster(client, auth_headers, biz_id))["name"] == "Wanjiru Kamau"  # the owner's roster

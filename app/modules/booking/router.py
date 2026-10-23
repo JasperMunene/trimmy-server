@@ -33,6 +33,7 @@ from app.modules.booking.schemas import (
     ListBookingsResponse,
 )
 from app.modules.booking.service import AvailabilityService
+from app.modules.business.schemas import ListReviewsResponse, ReviewReplyRequest, ReviewResponse
 
 availability_router = APIRouter(prefix="/businesses", tags=["Booking"])
 bookings_router = APIRouter(prefix="/bookings", tags=["Booking"])
@@ -233,6 +234,53 @@ async def assign_booking_staff(
 ):
     """Owner or front desk: assign an "any available" booking to someone, or reassign it."""
     return await BookingsService(db).assign_staff(current_user, booking_id, data.staff_id)
+
+
+@availability_router.get("/{business_id}/reviews", response_model=ListReviewsResponse)
+async def list_business_reviews(
+    business_id: str,
+    staffId: Optional[str] = Query(None, description="only reviews of this staff member's work"),
+    unreplied: bool = Query(False, description="only reviews the business hasn't answered"),
+    limit: int = Query(20, description="1-50"),
+    offset: int = Query(0),
+    db: AsyncSession = Depends(get_db),
+):
+    """A business's reviews, newest first: reviewer (name, photo), who did the service, what was
+    done, the visit date and the business's reply. Public; paged."""
+    return await ReviewsService(db).for_business(business_id, staffId, unreplied, limit, offset)
+
+
+@my_bookings_router.get("/me/reviews", response_model=ListReviewsResponse)
+async def list_my_reviews(
+    limit: int = Query(20, description="1-50"),
+    offset: int = Query(0),
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The reviews you've written, newest first, with any replies."""
+    return await ReviewsService(db).mine(current_user, limit, offset)
+
+
+@my_bookings_router.put("/reviews/{review_id}/reply", response_model=ReviewResponse)
+async def reply_to_review(
+    review_id: str,
+    data: ReviewReplyRequest,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Owner or front desk: reply to a review (or edit the reply). Shown publicly under the
+    review; the customer is notified the first time."""
+    return await ReviewsService(db).reply(current_user, review_id, data.text)
+
+
+@my_bookings_router.delete("/reviews/{review_id}/reply", response_model=ReviewResponse)
+async def delete_review_reply(
+    review_id: str,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Owner or front desk: remove the business's reply."""
+    return await ReviewsService(db).reply(current_user, review_id, None)
 
 
 @my_bookings_router.get("/me/bookings", response_model=ListBookingsResponse)

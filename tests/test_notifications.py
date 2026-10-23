@@ -112,6 +112,19 @@ async def test_mark_read_one_and_all(client, auth_headers, db_session, test_user
 
 
 @pytest.mark.asyncio
+async def test_delete_one(client, auth_headers, db_session, test_user):
+    await seed(db_session, test_user.id, 2)
+    newest = (await client.get("/api/v1/me/notifications", headers=auth_headers)).json()["notifications"][0]
+    url = f"/api/v1/me/notifications/{newest['notificationId']}"
+    stranger = await make_user(db_session, "not.my.inbox.delete@example.com")
+    assert (await client.delete(url, headers=headers_for(stranger))).status_code == 404
+    assert (await client.delete(url, headers=auth_headers)).json() == {"unreadCount": 1}
+    assert (await client.delete(url, headers=auth_headers)).status_code == 404
+    left = (await client.get("/api/v1/me/notifications", headers=auth_headers)).json()["notifications"]
+    assert len(left) == 1 and left[0]["notificationId"] != newest["notificationId"]
+
+
+@pytest.mark.asyncio
 async def test_test_notification_reaches_the_inbox(client, auth_headers, monkeypatch):
     sent = await client.post("/api/v1/me/notifications/test", headers=auth_headers)
     assert sent.status_code == 200 and sent.json()["type"] == "test"

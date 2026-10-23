@@ -128,3 +128,28 @@ async def test_google_sign_in_remembers_the_picture(db_session):
     newer = "https://lh3.googleusercontent.com/a/newer=s96-c"
     again = await GoogleAuthService(db_session)._find_or_link_user({"sub": "g-123", "email": "pic@example.com", "picture": newer})
     assert again.google_picture_url == newer
+
+
+@pytest.mark.asyncio
+async def test_photo_shows_on_roster_bookings_and_customers(client, auth_headers, db_session):
+    from datetime import datetime, timezone
+
+    from tests.test_read_bookings import headers_for, make_user
+    from tests.test_staff_identity import MEMBER_PHONE, _invite_and_accept
+    from tests.test_staff_identity import _business as staff_business
+
+    member = await make_user(db_session, "photo.member@example.com", phone=MEMBER_PHONE)
+    member.phone_verified_at = datetime.now(timezone.utc)
+    await db_session.commit()
+    member_headers = headers_for(member)
+    biz_id = await staff_business(client, auth_headers)
+    await _invite_and_accept(client, auth_headers, member_headers, biz_id, workingDays=None)
+    url = (await _upload(client, member_headers, _image())).json()["avatar_url"]
+
+    (roster,) = (await client.get(f"/api/v1/businesses/{biz_id}/team/members", headers=auth_headers)).json()["members"]
+    assert roster["avatarUrl"] == url
+
+    # A customer record with their verified phone shows their photo to the business.
+    await client.post(f"/api/v1/businesses/{biz_id}/customers", json={"name": "Wanjiku", "phone": MEMBER_PHONE}, headers=auth_headers)
+    customers = (await client.get(f"/api/v1/businesses/{biz_id}/customers", headers=auth_headers)).json()["customers"]
+    assert [c["avatarUrl"] for c in customers] == [url]
