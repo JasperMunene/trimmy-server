@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     MEDIA_ROOT: str = "media"
     MEDIA_BASE_URL: str = "http://localhost:8000/media"
     MAX_PHOTO_BYTES: int = 10 * 1024 * 1024
+    # Photos of past work per staff member (customer-facing portfolio).
+    MAX_PORTFOLIO_PHOTOS: int = 30
+
+    # How long an unpaid booking (pending_payment) holds its slot (docs/booking/PLAN.md, D6).
+    BOOKING_HOLD_MINUTES: int = 10
     # How long a presigned upload URL stays valid.
     UPLOAD_URL_EXPIRE_SECONDS: int = 600
     WORKER_CONCURRENCY: int = 10
@@ -39,6 +44,19 @@ class Settings(BaseSettings):
     RESEND_FROM_EMAIL: str = "noreply@yourdomain.com"
     CLIENT_URL: str = "http://localhost:8081"
 
+    # M-Pesa Daraja (STK push). Trimmy's own app and shortcode sign every push;
+    # the money is routed to each business's payment destination (PartyB).
+    MPESA_ENV: str = "sandbox"  # sandbox | production
+    MPESA_CONSUMER_KEY: str = ""
+    MPESA_CONSUMER_SECRET: str = ""
+    MPESA_SHORTCODE: str = ""
+    MPESA_PASSKEY: str = ""
+    # Public https URL of POST /payments/stk/callback; the secret is appended as
+    # the last path segment so only Daraja (who got the full URL) can call it.
+    # Daraja rejects URLs containing words like "mpesa"/"safaricom" (Invalid CallBackURL).
+    MPESA_CALLBACK_URL: str = ""
+    MPESA_CALLBACK_SECRET: str = ""
+
     # SMS (HostPinnacle / Intacom gateway) for phone OTP delivery.
     SMS_API_KEY: str = ""
     SMS_USER_ID: str = ""
@@ -47,6 +65,36 @@ class Settings(BaseSettings):
     # Region assumed when a phone number has no international prefix.
     SMS_DEFAULT_COUNTRY: str = "KE"
 
+    # Expo push notifications (BK-41). Empty URL = don't send (log only), as in tests.
+    EXPO_PUSH_URL: str = "https://exp.host/--/api/v2/push/send"
+    EXPO_ACCESS_TOKEN: str = ""  # only if "enhanced push security" is on in the Expo project
+
+    # Notification channels (app/modules/notifications/dispatch.py). Every notification lands in
+    # the in-app inbox and the live stream; these switch the outside channels on and off.
+    # Push stays off until the app's EAS project, APNs key and FCM credentials are set up;
+    # tokens are still collected meanwhile, so turning it on reaches everyone who signed in.
+    NOTIFY_PUSH_ENABLED: bool = False
+    NOTIFY_SMS_ENABLED: bool = True
+    NOTIFY_EMAIL_ENABLED: bool = True
+    # POST /me/notifications/test: sends yourself a test notification (for checking the stream).
+    NOTIFY_TEST_ENDPOINT_ENABLED: bool = True
+    # Inbox rows older than this are deleted by notifications.prune.
+    NOTIFICATION_RETENTION_DAYS: int = 90
+    # Where invitation SMS/emails send people who don't have the app yet (store page or landing
+    # page). Empty = the message just says to get the Trimmy app.
+    APP_DOWNLOAD_URL: str = ""
+
+    # Live stream (GET /me/events, server-sent events).
+    #   redis: events published by any process (API or worker) reach every API process
+    #   local: in-process only (tests, or a single process without Redis)
+    REALTIME_BACKEND: str = "redis"
+    # A comment line this often keeps proxies and mobile NATs from dropping an idle stream.
+    SSE_HEARTBEAT_SECONDS: int = 20
+    # Streams are closed after this long and the app reconnects: it picks up a fresh access
+    # token and spreads clients across API processes after a deploy.
+    SSE_MAX_CONNECTION_SECONDS: int = 25 * 60
+    SSE_MAX_STREAMS_PER_USER: int = 5
+
     GOOGLE_AUTH_CLIENT_ID: str = ""
     GOOGLE_AUTH_CLIENT_SECRET: str = ""
     # This server's callback. Must be listed exactly under "Authorized redirect URIs"
@@ -54,11 +102,38 @@ class Settings(BaseSettings):
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/google/authorized"
     # Where the callback sends the user afterwards, per platform.
     GOOGLE_WEB_REDIRECT_URL: str = "http://localhost:8081/auth/google"
+    # Where a web app may ask to be sent back to (GET /auth/google/url?redirect_uri=), exact URLs
+    # only, so a sign-in code can never be sent to someone else's site. Add the deployed web app's
+    # https://<domain>/auth/google here (env: a JSON list).
+    GOOGLE_WEB_REDIRECT_ALLOWLIST: List[str] = [
+        "http://localhost:3000/auth/google",
+        "http://localhost:8081/auth/google",
+    ]
     GOOGLE_MOBILE_REDIRECT_URL: str = "trimmy://auth/google"
 
-    RATE_LIMIT_LOGIN: str = "5/minute"
-    RATE_LIMIT_REGISTER: str = "3/minute"
+    # Per client IP. Kept loose enough for many phones behind one carrier IP (CGNAT) or salon
+    # Wi-Fi; guessing one account's password is stopped by LOGIN_MAX_FAILURES instead.
+    RATE_LIMIT_LOGIN: str = "20/minute"
+    RATE_LIMIT_REGISTER: str = "10/minute"
     RATE_LIMIT_CHECK_EMAIL: str = "10/minute"
+    # Wrong passwords for one email before login is refused for the rest of the window.
+    LOGIN_MAX_FAILURES: str = "10/15minutes"
+    # Read cache for public discovery responses (app/core/cache.py): redis (shared by every
+    # process), local (this process only: tests) or off. Changes clear entries as they're
+    # committed; these TTLs are only the backstop.
+    CACHE_BACKEND: str = "redis"
+    CACHE_SEARCH_SECONDS: int = 120
+    CACHE_PROFILE_SECONDS: int = 300
+    # Where the counts live, shared by every API process. Empty: REDIS_URL. memory:// for tests.
+    # Redis down: each process counts on its own until it's back.
+    RATE_LIMIT_STORAGE: str = ""
+
+    # Admin app (app/modules/admin): short sessions, 2-step sign-in.
+    ADMIN_ACCESS_TOKEN_MINUTES: int = 15
+    ADMIN_SESSION_HOURS: int = 12
+    # Encrypts admins' authenticator secrets. Empty: derived from SECRET_KEY (set it to rotate
+    # SECRET_KEY without making every admin set up their authenticator again).
+    TOTP_ENCRYPTION_KEY: str = ""
 
     OTP_MAX_ATTEMPTS: int = 5
     OTP_RESEND_COOLDOWN_SECONDS: int = 60

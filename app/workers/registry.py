@@ -21,6 +21,15 @@ Enqueue it from anywhere (API request, service, another task):
 
     await recompute_rating.enqueue(business_id=str(business.id))
 
+Periodic tasks run on a schedule. `python worker.py --beat` (exactly one
+instance) enqueues them when due; normal workers run them like any task:
+
+    @periodic("booking.expire_holds", every=60)
+    async def expire_holds_job(db: AsyncSession) -> None: ...
+
+A periodic task takes no arguments besides an optional `db`, and must be safe
+to run twice at once (a slow run can overlap the next).
+
 Tasks are async and take JSON-serialisable keyword arguments. Raising any
 exception retries the task (up to max_retries, spaced by the queue's
 retry delay); raise PermanentError to skip straight to the dead queue.
@@ -112,6 +121,15 @@ class Task:
 
 TASKS: dict[str, Task] = {}
 
+
+@dataclass(frozen=True)
+class Periodic:
+    task: Task
+    every_seconds: int
+
+
+PERIODIC: dict[str, Periodic] = {}
+
 # Strong references so in-process fallback runs aren't garbage-collected mid-flight.
 _background: set[asyncio.Task] = set()
 
@@ -145,6 +163,27 @@ def task(
             raise ValueError(f"Task {name} is already registered")
         TASKS[name] = Task(name, fn, queue, max_retries, inline_fallback)
         return TASKS[name]
+
+    return decorator
+
+
+def periodic(
+    name: str, *, every: int, queue: str = "default", max_retries: int = 0
+) -> Callable[[Callable[..., Awaitable[Any]]], Task]:
+    """Register a task that beat enqueues every `every` seconds.
+
+    No retries by default: the next scheduled run is the retry.
+    """
+    if every < 1:
+        raise ValueError("every must be at least 1 second")
+
+    def decorator(fn: Callable[..., Awaitable[Any]]) -> Task:
+        params = set(inspect.signature(fn).parameters) - {"db"}
+        if params:
+            raise TypeError(f"Periodic task {name} can't take arguments besides db (got {', '.join(sorted(params))})")
+        registered = task(name, queue=queue, max_retries=max_retries)(fn)
+        PERIODIC[name] = Periodic(registered, every)
+        return registered
 
     return decorator
 

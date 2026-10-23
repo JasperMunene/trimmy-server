@@ -143,7 +143,7 @@ async def publish_business(
 async def test_search_returns_200_without_auth(client: AsyncClient):
     resp = await client.get("/api/v1/businesses/search")
     assert resp.status_code == 200
-    assert resp.json() == {"businesses": []}
+    assert resp.json() == {"businesses": [], "total": 0}
 
 
 @pytest.mark.asyncio
@@ -610,3 +610,46 @@ async def test_get_draft_returns_description_and_amenities(
     data = resp.json()
     assert data["description"] == "Nail art specialists."
     assert data["amenities"] == ["Free WiFi", "Card payment accepted"]
+
+
+@pytest.mark.asyncio
+async def test_search_pages_with_limit_and_offset(client: AsyncClient, auth_headers: dict):
+    for i in range(3):
+        await publish_business(client, auth_headers, name=f"Paged {i}", phone=f"+25472000010{i}", categories=["hair_salon"])
+    everything = (await client.get("/api/v1/businesses/search")).json()
+    assert everything["total"] == 3 and len(everything["businesses"]) == 3
+
+    first = (await client.get("/api/v1/businesses/search", params={"limit": 2})).json()
+    rest = (await client.get("/api/v1/businesses/search", params={"limit": 2, "offset": 2})).json()
+    assert first["total"] == rest["total"] == 3
+    assert [b["businessId"] for b in first["businesses"] + rest["businesses"]] == [
+        b["businessId"] for b in everything["businesses"]
+    ]
+    assert (await client.get("/api/v1/businesses/search", params={"limit": 101})).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_profile_counts_every_review_but_shows_the_latest_few(
+    client: AsyncClient, auth_headers: dict, db_session
+):
+    from datetime import datetime, timedelta, timezone
+
+    from app.modules.business.service import PROFILE_REVIEWS
+
+    business_id = await publish_business(client, auth_headers, name="Busy Salon", phone="+254720000110", categories=["hair_salon"])
+    now = datetime.now(timezone.utc)
+    total = PROFILE_REVIEWS + 3
+    db_session.add_all([
+        Review(business_id=uuid.UUID(business_id), author_name=f"Customer {i}", rating=5 if i % 2 else 4,
+               text=f"Review {i}", created_at=now - timedelta(hours=i))
+        for i in range(total)
+    ])
+    await db_session.commit()
+
+    profile = (await client.get(f"/api/v1/businesses/{business_id}/profile")).json()
+    assert profile["reviewCount"] == total
+    assert profile["rating"] == round(sum(5 if i % 2 else 4 for i in range(total)) / total, 1)
+    assert [r["text"] for r in profile["reviews"]] == [f"Review {i}" for i in range(PROFILE_REVIEWS)]
+
+    card = (await client.get("/api/v1/businesses/search")).json()["businesses"][0]
+    assert card["reviewCount"] == total and card["rating"] == profile["rating"]

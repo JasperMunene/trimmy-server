@@ -338,10 +338,25 @@ async def test_my_businesses(client, test_user, auth_headers, db_session):
 
     response = await client.get("/api/v1/me/businesses", headers=auth_headers)
     assert response.status_code == 200
+    owner_staff = (await db_session.execute(
+        select(Staff.id).where(Staff.business_id == mine.id, Staff.user_id == test_user.id))).scalar_one()
+    desk_staff = (await db_session.execute(
+        select(Staff.id).where(Staff.business_id == work.id, Staff.user_id == test_user.id))).scalar_one()
     assert response.json() == {"businesses": [
-        {"businessId": str(mine.id), "name": "Fade Studio", "status": "published", "role": "owner"},
-        {"businessId": str(work.id), "name": "Cuts Co", "status": "published", "role": "front_desk"},
+        {"businessId": str(mine.id), "name": "Fade Studio", "status": "published", "role": "owner", "staffId": str(owner_staff),
+         "frontDeskAccess": False, "modes": [], "suspendedAt": None, "suspendedReason": None},
+        {"businessId": str(work.id), "name": "Cuts Co", "status": "published", "role": "front_desk", "staffId": str(desk_staff),
+         "frontDeskAccess": True, "modes": ["front_desk"], "suspendedAt": None, "suspendedReason": None},
     ]}
+
+
+@pytest.mark.asyncio
+async def test_my_businesses_owner_without_a_staff_row(client, test_user, auth_headers, db_session):
+    mine = Business(owner_id=test_user.id, name="Team Salon", phone="+254711119999", status="published")
+    db_session.add(mine)
+    await db_session.commit()
+    response = await client.get("/api/v1/me/businesses", headers=auth_headers)
+    assert response.json()["businesses"][0]["staffId"] is None  # a team-mode owner who doesn't take clients
 
 
 @pytest.mark.asyncio

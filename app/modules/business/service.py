@@ -5,11 +5,13 @@ from math import asin, cos, radians, sin, sqrt
 from typing import Optional
 import uuid as uuid_pkg
 from fastapi import HTTPException, UploadFile
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
+from app.core.phone_utils import InvalidPhoneNumberError, normalise_phone
+from app.core.images import PHOTO_SIDE, ImageError, shrink_image
 from app.core.storage import IMAGE_TYPES, DirectUploadUnsupported, get_storage, sniff_image
 from app.modules.auth.models import User
 from app.modules.business.models import (
@@ -25,6 +27,8 @@ from app.modules.business.models import (
     Service,
     ServiceCategory,
     Staff,
+    StaffPortfolioPhoto,
+    StaffService,
     TeamInvitation,
     TeamMode,
     VerificationStatus,
@@ -32,10 +36,11 @@ from app.modules.business.models import (
 )
 from app.modules.business.schemas import (
     AddTeamMemberRequest,
+    BookingSettingsResponse,
     BusinessProfileResponse,
-    BusinessSummaryResponse,
     CancellationPolicyResponse,
     CompletePhotoUploadRequest,
+    CompletePortfolioUploadRequest,
     CreateBusinessRequest,
     CreateBusinessResponse,
     CreateServiceCategoryRequest,
@@ -54,6 +59,8 @@ from app.modules.business.schemas import (
     PhotoUploadUrlRequest,
     PhotoUploadUrlResponse,
     PoliciesResponse,
+    PortfolioPhotoResponse,
+    PortfolioResponse,
     ProfilePoliciesResponse,
     ProfileServiceResponse,
     PublishBusinessRequest,
@@ -65,10 +72,13 @@ from app.modules.business.schemas import (
     ServiceResponse,
     SetPaymentDestinationRequest,
     SetPoliciesRequest,
+    SetStaffServicesRequest,
     SetTeamModeRequest,
     StaffMemberResponse,
+    StaffServicesResponse,
     TeamMemberResponse,
     TeamModeResponse,
+    UpdateBookingSettingsRequest,
     UpdateBusinessResponse,
     UpdateServiceRequest,
     UpdateTeamMemberRequest,
@@ -197,16 +207,77 @@ def photo_response(p: BusinessPhoto) -> PhotoResponse:
     return PhotoResponse(photoId=p.id, businessId=p.business_id, url=p.url, isCover=p.is_cover, createdAt=p.created_at)
 
 
-def team_member_response(inv: TeamInvitation) -> TeamMemberResponse:
+def portfolio_photo_response(p: StaffPortfolioPhoto) -> PortfolioPhotoResponse:
+    return PortfolioPhotoResponse(photoId=p.id, staffId=p.staff_id, url=p.url, createdAt=p.created_at)
+
+
+def booking_settings_response(b: Business) -> BookingSettingsResponse:
+    return BookingSettingsResponse(
+        businessId=b.id,
+        timezone=b.timezone,
+        slotIntervalMinutes=b.slot_interval_minutes,
+        bufferMinutes=b.buffer_minutes,
+        minLeadMinutes=b.min_lead_minutes,
+        maxDaysAhead=b.max_days_ahead,
+    )
+
+
+def invite_email(raw: Optional[str]) -> Optional[str]:
+    """Emails are matched case-insensitively."""
+    return (raw or "").strip().lower() or None
+
+
+def invite_phone(raw: Optional[str]) -> Optional[str]:
+    """E.164 when it's a real number, so "0722 000 111" matches "+254722000111"; otherwise as typed."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        return normalise_phone(raw)
+    except InvalidPhoneNumberError:
+        return raw
+
+
+def invitations_for(user: User):
+    """Pending-invitation filter for this user: their (verified) email or their phone."""
+    matches = []
+    if invite_email(user.email):
+        matches.append(func.lower(TeamInvitation.email) == invite_email(user.email))
+    if invite_phone(user.phone):
+        matches.append(TeamInvitation.phone.in_({user.phone, invite_phone(user.phone)}))
+    return or_(*matches) if matches else None
+
+
+# Reviews included on a business profile; the rest are paged (GET /businesses/{id}/reviews).
+PROFILE_REVIEWS = 6
+
+# Commission for staff who don't say (the invite form's default). Desk-only members get none:
+# a percent sent for them (older app versions always send one) is ignored, not an error.
+DEFAULT_COMMISSION = 40
+
+
+async def staff_avatar_map(db: AsyncSession, staff_ids) -> dict:
+    """staff id -> profile picture (the person's own, mirrored onto Staff), in one query."""
+    ids = [i for i in set(staff_ids) if i]
+    if not ids:
+        return {}
+    rows = await db.execute(select(Staff.id, Staff.avatar_url).where(Staff.id.in_(ids)))
+    return {sid: url for sid, url in rows.all()}
+
+
+def team_member_response(inv: TeamInvitation, avatar_url: Optional[str] = None) -> TeamMemberResponse:
     return TeamMemberResponse(
         invitationId=inv.id,
         businessId=inv.business_id,
+        staffId=inv.staff_id,
         name=inv.name,
         email=inv.email,
         phone=inv.phone,
         role=inv.role,
         status=inv.status,
-        commissionPercent=inv.commission_percent if inv.commission_percent is not None else 40,
+        commissionPercent=inv.commission_percent,
+        frontDeskAccess=bool(inv.front_desk_access),
+        avatarUrl=avatar_url,
         workingDays=inv.working_days,
         sentAt=inv.sent_at,
     )
@@ -314,6 +385,7 @@ class BusinessService:
             categories=business.categories,
             phone=business.phone,
             location=LocationResponse(**business.location),
+            amenities=business.amenities or [],
             status=business.status,
             onboardingStep=business.onboarding_step,
             createdAt=business.created_at,
@@ -339,6 +411,8 @@ class BusinessService:
         business.categories = data.categories
         business.phone = data.phone
         business.location = data.location.model_dump()
+        if data.amenities is not None:  # left out = unchanged (older app versions don't send it)
+            business.amenities = data.amenities
         await self.db.commit()
         await self.db.refresh(business)
 
@@ -348,6 +422,7 @@ class BusinessService:
             categories=business.categories,
             phone=business.phone,
             location=LocationResponse(**business.location),
+            amenities=business.amenities or [],
         )
 
     # ─── get-business-draft ──────────────────────────────────
@@ -383,6 +458,7 @@ class BusinessService:
                 else None
             ),
             teamMode=business.team_mode,
+            bookingSettings=booking_settings_response(business),
             status=business.status,
             onboardingStep=business.onboarding_step,
         )
@@ -530,6 +606,220 @@ class BusinessService:
         if key:
             await delete_stored_object.enqueue(key=key)
 
+    # ─── staff portfolio ─────────────────────────────────────
+    # Photos of a staff member's work. The member manages their own; the owner manages
+    # anyone's. Same upload shapes as business photos: presigned direct upload
+    # (upload-url → PUT → complete), or multipart through the API.
+
+    async def _get_portfolio_staff(self, business_id: str, user_id: str, staff_id: str) -> Staff:
+        bid = self._parse_path_id(business_id, "businessId")
+        uid = self._parse_path_id(user_id, "userId")
+        staff = await self.db.get(Staff, self._parse_path_id(staff_id, "staffId"))
+        business = await self.db.get(Business, bid)
+        if business is None or staff is None or staff.business_id != bid:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "message": "staffId does not exist for this business"},
+            )
+        if business.owner_id == uid or staff.user_id == uid:
+            return staff
+        works_here = (
+            await self.db.execute(select(Staff.id).where(Staff.business_id == bid, Staff.user_id == uid))
+        ).first()
+        if works_here:
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "forbidden", "message": "Only the owner or this staff member can change their portfolio"},
+            )
+        raise HTTPException(status_code=404, detail={"error": "not_found", "message": "Business not found"})
+
+    async def _portfolio_rows(self, staff_id: uuid_pkg.UUID) -> list:
+        return (
+            await self.db.execute(
+                select(StaffPortfolioPhoto)
+                .where(StaffPortfolioPhoto.staff_id == staff_id)
+                .order_by(StaffPortfolioPhoto.created_at.desc())
+            )
+        ).scalars().all()
+
+    async def _require_portfolio_room(self, staff_id: uuid_pkg.UUID) -> None:
+        count = (
+            await self.db.execute(
+                select(func.count()).select_from(StaffPortfolioPhoto).where(StaffPortfolioPhoto.staff_id == staff_id)
+            )
+        ).scalar_one()
+        if count >= settings.MAX_PORTFOLIO_PHOTOS:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "portfolio_full",
+                    "message": f"A portfolio holds up to {settings.MAX_PORTFOLIO_PHOTOS} photos; delete one first",
+                },
+            )
+
+    @staticmethod
+    def _portfolio_key(staff: Staff, photo_id: uuid_pkg.UUID, content_type: str) -> str:
+        return f"businesses/{staff.business_id}/staff/{staff.id}/portfolio/{photo_id}.{IMAGE_TYPES[content_type]}"
+
+    async def get_portfolio(self, business_id: str, user_id: str, staff_id: str) -> PortfolioResponse:
+        staff = await self._get_portfolio_staff(business_id, user_id, staff_id)
+        rows = await self._portfolio_rows(staff.id)
+        return PortfolioResponse(
+            staffId=staff.id,
+            photos=[portfolio_photo_response(p) for p in rows],
+            maxPhotos=settings.MAX_PORTFOLIO_PHOTOS,
+        )
+
+    async def create_portfolio_upload_url(
+        self, business_id: str, user_id: str, staff_id: str, data: PhotoUploadUrlRequest
+    ) -> PhotoUploadUrlResponse:
+        staff = await self._get_portfolio_staff(business_id, user_id, staff_id)
+        if data.size_bytes > settings.MAX_PHOTO_BYTES:
+            raise self._too_large()
+        await self._require_portfolio_room(staff.id)
+
+        key = self._portfolio_key(staff, uuid_pkg.uuid4(), data.content_type)
+        try:
+            url = await get_storage().presign_upload(
+                key, data.content_type, data.size_bytes, settings.UPLOAD_URL_EXPIRE_SECONDS
+            )
+        except DirectUploadUnsupported:
+            raise HTTPException(
+                status_code=501,
+                detail={
+                    "error": "direct_upload_unavailable",
+                    "message": "Direct uploads aren't available on this server; use multipart POST /portfolio",
+                },
+            )
+        return PhotoUploadUrlResponse(
+            uploadUrl=url,
+            headers={"Content-Type": data.content_type},
+            key=key,
+            expiresIn=settings.UPLOAD_URL_EXPIRE_SECONDS,
+        )
+
+    async def complete_portfolio_upload(
+        self, business_id: str, user_id: str, staff_id: str, data: CompletePortfolioUploadRequest
+    ) -> PortfolioPhotoResponse:
+        staff = await self._get_portfolio_staff(business_id, user_id, staff_id)
+
+        match = re.fullmatch(
+            rf"businesses/{staff.business_id}/staff/{staff.id}/portfolio/([0-9a-f-]{{36}})\.(jpg|png)", data.key
+        )
+        if not match:
+            raise _validation_error("key was not issued for this staff member")
+        photo_id = uuid_pkg.UUID(match.group(1))
+
+        existing = await self.db.get(StaffPortfolioPhoto, photo_id)
+        if existing:
+            # Retried completion: same answer as the first time.
+            return portfolio_photo_response(existing)
+
+        storage = get_storage()
+        stored = await storage.stat(data.key)
+        if stored is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "upload_not_found", "message": "No uploaded file found for this key; upload it first"},
+            )
+        if stored.size > settings.MAX_PHOTO_BYTES:
+            await storage.delete(data.key)
+            raise self._too_large()
+        actual_type = sniff_image(await storage.read_head(data.key, 16))
+        if actual_type is None or IMAGE_TYPES[actual_type] != match.group(2):
+            await storage.delete(data.key)
+            raise _validation_error("photo must be a JPEG or PNG image")
+        try:
+            await self._require_portfolio_room(staff.id)
+            # Shrunk to a small JPEG (phones upload multi-MB originals) under the same photo id.
+            small = await shrink_image(await storage.read(data.key), PHOTO_SIDE)
+        except ImageError:
+            await storage.delete(data.key)
+            raise _validation_error("photo must be a JPEG or PNG image")
+        except HTTPException:
+            await storage.delete(data.key)
+            raise
+        key = self._portfolio_key(staff, photo_id, "image/jpeg")
+        url = await storage.save(key, small, "image/jpeg")
+        if key != data.key:
+            await storage.delete(data.key)
+        return await self._add_portfolio_photo(staff, photo_id, key, url)
+
+    async def upload_portfolio_photo(
+        self, business_id: str, user_id: str, staff_id: str, photo: UploadFile
+    ) -> PortfolioPhotoResponse:
+        staff = await self._get_portfolio_staff(business_id, user_id, staff_id)
+        await self._require_portfolio_room(staff.id)
+
+        data = await photo.read(settings.MAX_PHOTO_BYTES + 1)
+        if not data:
+            raise _validation_error("photo file is required")
+        if len(data) > settings.MAX_PHOTO_BYTES:
+            raise self._too_large()
+        if sniff_image(data) is None:
+            raise _validation_error("photo must be a JPEG or PNG image")
+        try:
+            data = await shrink_image(data, PHOTO_SIDE)  # a small JPEG, not the camera original
+        except ImageError:
+            raise _validation_error("photo must be a JPEG or PNG image")
+
+        photo_id = uuid_pkg.uuid4()
+        key = self._portfolio_key(staff, photo_id, "image/jpeg")
+        url = await get_storage().save(key, data, "image/jpeg")
+        try:
+            return await self._add_portfolio_photo(staff, photo_id, key, url)
+        except Exception:
+            await delete_stored_object.enqueue(key=key)
+            raise
+
+    async def _add_portfolio_photo(self, staff: Staff, photo_id: uuid_pkg.UUID, key: str, url: str) -> PortfolioPhotoResponse:
+        photo = StaffPortfolioPhoto(id=photo_id, staff_id=staff.id, business_id=staff.business_id, url=url, storage_key=key)
+        self.db.add(photo)
+        await self.db.commit()
+        await self.db.refresh(photo)
+        return portfolio_photo_response(photo)
+
+    async def delete_portfolio_photo(self, business_id: str, user_id: str, staff_id: str, photo_id: str) -> None:
+        staff = await self._get_portfolio_staff(business_id, user_id, staff_id)
+        photo = await self.db.get(StaffPortfolioPhoto, self._parse_path_id(photo_id, "photoId"))
+        if not photo or photo.staff_id != staff.id:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "message": "photoId does not exist in this portfolio"},
+            )
+        key = photo.storage_key
+        await self.db.delete(photo)
+        await self.db.commit()
+        await delete_stored_object.enqueue(key=key)
+
+    async def staff_portfolio_urls(self, staff_ids: list) -> dict:
+        """staff id -> [photo urls], newest first, for the given staff, in one query."""
+        if not staff_ids:
+            return {}
+        rows = await self.db.execute(
+            select(StaffPortfolioPhoto.staff_id, StaffPortfolioPhoto.url)
+            .where(StaffPortfolioPhoto.staff_id.in_(staff_ids))
+            .order_by(StaffPortfolioPhoto.created_at.desc())
+        )
+        mapping: dict = {sid: [] for sid in staff_ids}
+        for staff_id, url in rows:
+            mapping[staff_id].append(url)
+        return mapping
+
+    async def _delete_portfolio_files(self, staff_ids: list) -> list:
+        """Remove these staff members' portfolio rows; returns the storage keys to delete after commit."""
+        if not staff_ids:
+            return []
+        keys = list(
+            (
+                await self.db.execute(
+                    select(StaffPortfolioPhoto.storage_key).where(StaffPortfolioPhoto.staff_id.in_(staff_ids))
+                )
+            ).scalars()
+        )
+        await self.db.execute(delete(StaffPortfolioPhoto).where(StaffPortfolioPhoto.staff_id.in_(staff_ids)))
+        return keys
+
     # ─── set-working-hours ───────────────────────────────────
 
     async def set_working_hours(self, business_id: str, user_id: str, weekly_hours: WeeklyHoursRequest) -> WorkingHoursResponse:
@@ -670,6 +960,7 @@ class BusinessService:
             )
         await self.db.delete(service)
         await self._forget_deposit_services(business.id, {service.id})
+        await self.db.execute(delete(StaffService).where(StaffService.service_id == service.id))
         await self.db.commit()
 
     async def delete_service_category(self, business_id: str, user_id: str, category_id: str) -> None:
@@ -685,6 +976,8 @@ class BusinessService:
         )
         await self.db.delete(category)
         await self._forget_deposit_services(business.id, service_ids)
+        if service_ids:
+            await self.db.execute(delete(StaffService).where(StaffService.service_id.in_(service_ids)))
         await self.db.commit()
 
     async def _forget_deposit_services(self, business_id: uuid_pkg.UUID, service_ids: set) -> None:
@@ -779,6 +1072,8 @@ class BusinessService:
         # check (e.g. an M-Pesa account-name lookup) would start at PENDING and
         # be completed by a worker task.
         pd.verification_status = VerificationStatus.VERIFIED
+        # New details: Trimmy's team checks them again (admin → Payment details).
+        pd.reviewed_at = pd.reviewed_by = None
 
         business.onboarding_step = OnboardingStep.PAYMENT_DESTINATION
         await self.db.commit()
@@ -805,8 +1100,8 @@ class BusinessService:
                 raise _validation_error("paybillNumber and paybillAccountNumber are required for type mpesa_paybill")
             if not re.fullmatch(r"\d{5,6}", paybill):
                 raise _validation_error("paybillNumber must be 5-6 digits")
-            if len(account) > 50:
-                raise _validation_error("paybillAccountNumber must be at most 50 characters")
+            if not re.fullmatch(r"[A-Za-z0-9\-_/. ]{1,20}", account):
+                raise _validation_error("paybillAccountNumber must be 1-20 letters, digits, spaces or -_/.")
             return {"paybill_number": paybill, "paybill_account_number": account}
 
         name, shortcode, account = (data.bank_name or "").strip(), digits(data.bank_shortcode), digits(data.bank_account_number)
@@ -814,8 +1109,8 @@ class BusinessService:
             raise _validation_error("bankName, bankShortcode, and bankAccountNumber are required for type bank_account")
         if not re.fullmatch(r"\d{5,6}", shortcode):
             raise _validation_error("bankShortcode must be 5-6 digits")
-        if not re.fullmatch(r"[A-Za-z0-9]{5,34}", account):
-            raise _validation_error("bankAccountNumber must be 5-34 letters or digits")
+        if not re.fullmatch(r"[A-Za-z0-9]{5,20}", account):
+            raise _validation_error("bankAccountNumber must be 5-20 letters or digits")
         return {"bank_name": name, "bank_shortcode": shortcode, "bank_account_number": account}
 
     # ─── set-team-mode ───────────────────────────────────────
@@ -823,7 +1118,18 @@ class BusinessService:
     async def set_team_mode(self, business_id: str, user_id: str, data: SetTeamModeRequest) -> TeamModeResponse:
         business = await self._get_owned_business(business_id, user_id)
         business.team_mode = data.team_mode
-        business.onboarding_step = OnboardingStep.TEAM_MODE
+        # Only moves the wizard forward: switching later (e.g. a published solo business adding its
+        # first team member) mustn't send the owner back into setup.
+        steps = list(OnboardingStep)
+        if business.status != BusinessStatus.PUBLISHED and (
+            business.onboarding_step is None or steps.index(OnboardingStep(business.onboarding_step)) < steps.index(OnboardingStep.TEAM_MODE)
+        ):
+            business.onboarding_step = OnboardingStep.TEAM_MODE
+        # A published business going solo needs the owner bookable. Going to team keeps the
+        # owner's Staff row as it is (still bookable, bookings stay theirs; they can drop out of
+        # the schedule by setting their services to none).
+        if business.status == BusinessStatus.PUBLISHED and data.team_mode == TeamMode.SOLO:
+            await self._ensure_owner_staff(business)
         await self.db.commit()
 
         return TeamModeResponse(
@@ -836,19 +1142,22 @@ class BusinessService:
 
     async def invite_team_member(self, business_id: str, user_id: str, data: InviteTeamMemberRequest) -> TeamMemberResponse:
         business = await self._get_owned_business(business_id, user_id)
-        invitation = await self._create_invitation(business, user_id, data)
+        invitation = await self._create_invitation(
+            business, user_id, data, commission_percent=None if data.role == "front_desk" else DEFAULT_COMMISSION
+        )
         return team_member_response(invitation)
 
     async def _create_invitation(
         self, business: Business, user_id: str, data: InviteTeamMemberRequest, **member_fields
     ) -> TeamInvitation:
-        if not data.email and not data.phone:
+        email, phone = invite_email(data.email), invite_phone(data.phone)
+        if not email and not phone:
             raise _validation_error("email or phone is required")
 
-        for field, value in (("email", data.email), ("phone", data.phone)):
+        for field, value in (("email", email), ("phone", phone)):
             if not value:
                 continue
-            column = getattr(TeamInvitation, field)
+            column = func.lower(TeamInvitation.email) if field == "email" else TeamInvitation.phone
             clash = (
                 await self.db.execute(
                     select(TeamInvitation.status).where(
@@ -871,17 +1180,167 @@ class BusinessService:
 
         invitation = TeamInvitation(
             business_id=business.id,
-            email=data.email,
-            phone=data.phone,
+            email=email,
+            phone=phone,
             role=data.role,
             status=InvitationStatus.PENDING,
             invited_by=user_id,
+            # Desk-only members always have the desk; staff only if asked.
+            front_desk_access=data.role == "front_desk" or data.front_desk_access,
             **member_fields,
         )
         self.db.add(invitation)
         await self.db.commit()
         await self.db.refresh(invitation)
+        await self._tell_invitee(business, invitation)
         return invitation
+
+    async def _tell_invitee(self, business: Business, invitation: TeamInvitation) -> None:
+        """Someone with an account sees it in the app (GET /me/invitations matches them by email or
+        phone); anyone else gets an SMS and/or email telling them to sign up with that contact."""
+        from app.modules.notifications.dispatch import email_html, notify_contact
+        from app.modules.notifications.tasks import notify
+
+        role = "front desk" if invitation.role == "front_desk" else "staff"
+        matches = []
+        if invitation.email:
+            matches.append(func.lower(User.email) == invitation.email.lower())
+        if invitation.phone:
+            matches.append(User.phone == invitation.phone)
+        existing = (await self.db.execute(select(User.id).where(or_(*matches)).limit(1))).scalar_one_or_none()
+        if existing is not None:
+            await notify(existing, "Team invitation", f"{business.name} invited you to join their team as {role}.",
+                         type="team_invitation", invitationId=invitation.id, businessId=business.id)
+            return
+        link = settings.APP_DOWNLOAD_URL
+        get_app = f"Get the Trimmy app{': ' + link if link else ''} and sign up with this"
+        await notify_contact(
+            phone=invitation.phone, email=invitation.email,
+            sms=f"Trimmy: {business.name} invited you to join their team as {role}. {get_app} number to accept.",
+            subject=f"{business.name} invited you to Trimmy",
+            html_body=email_html(
+                f"Join {business.name} on Trimmy",
+                [f"{business.name} invited you to join their team as {role}.",
+                 "Sign up with this email address to see and accept the invitation."],
+                link or None, "Get the app",
+            ),
+        )
+
+    # ─── booking settings ────────────────────────────────────
+
+    async def update_booking_settings(
+        self, business_id: str, user_id: str, data: UpdateBookingSettingsRequest
+    ) -> BookingSettingsResponse:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        business = await self._get_owned_business(business_id, user_id)
+        fields = data.model_fields_set
+        for name in fields:
+            if getattr(data, name) is None:
+                raise _validation_error(f"{name} cannot be null")
+
+        if "timezone" in fields:
+            try:
+                ZoneInfo(data.timezone)
+            except (ZoneInfoNotFoundError, ValueError):
+                raise _validation_error(f"Unknown timezone {data.timezone!r}; use an IANA name like Africa/Nairobi")
+            business.timezone = data.timezone
+        if "slot_interval_minutes" in fields:
+            if 60 % data.slot_interval_minutes:
+                raise _validation_error("slotIntervalMinutes must divide 60 evenly (5, 10, 15, 20, 30 or 60)")
+            business.slot_interval_minutes = data.slot_interval_minutes
+        for name in ("buffer_minutes", "min_lead_minutes", "max_days_ahead"):
+            if name in fields:
+                setattr(business, name, getattr(data, name))
+
+        await self.db.commit()
+        await self.db.refresh(business)
+        return booking_settings_response(business)
+
+    # ─── staff services ──────────────────────────────────────
+
+    async def _get_staff(self, business: Business, staff_id: str) -> Staff:
+        staff = await self.db.get(Staff, self._parse_path_id(staff_id, "staffId"))
+        if not staff or staff.business_id != business.id:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "message": "staffId does not exist for this business"},
+            )
+        return staff
+
+    async def staff_service_ids(self, staff_ids: list) -> dict:
+        """staff id -> [service ids] for the given staff, in one query."""
+        if not staff_ids:
+            return {}
+        rows = await self.db.execute(select(StaffService).where(StaffService.staff_id.in_(staff_ids)))
+        mapping: dict = {sid: [] for sid in staff_ids}
+        for row in rows.scalars():
+            mapping[row.staff_id].append(row.service_id)
+        return mapping
+
+    async def my_staff_services(self, user_id: uuid_pkg.UUID, business_id: str):
+        """The caller's own services at business_id, with names and prices (staff / front desk)."""
+        from app.modules.business.schemas import MyStaffServiceItem, MyStaffServicesResponse
+
+        bid = self._parse_path_id(business_id, "businessId")
+        staff = (
+            await self.db.execute(select(Staff).where(Staff.business_id == bid, Staff.user_id == user_id))
+        ).scalars().first()
+        if staff is None:
+            raise HTTPException(status_code=404, detail={"error": "not_found", "message": "You don't work at this business"})
+        query = select(Service).where(Service.business_id == bid).order_by(Service.name)
+        if not staff.performs_all_services:
+            mapped = (await self.staff_service_ids([staff.id]))[staff.id]
+            query = query.where(Service.id.in_(mapped or [uuid_pkg.uuid4()]))  # none mapped: no rows
+        services = (await self.db.execute(query)).scalars().all()
+        return MyStaffServicesResponse(
+            staffId=staff.id,
+            allServices=staff.performs_all_services,
+            services=[
+                MyStaffServiceItem(
+                    serviceId=s.id, name=s.name, durationMinutes=s.duration_minutes,
+                    price=MoneyResponse(amount=s.price_amount, currency=s.price_currency),
+                )
+                for s in services
+            ],
+        )
+
+    async def get_staff_services(self, business_id: str, user_id: str, staff_id: str) -> StaffServicesResponse:
+        business = await self._get_owned_business(business_id, user_id)
+        staff = await self._get_staff(business, staff_id)
+        ids = (await self.staff_service_ids([staff.id]))[staff.id]
+        return StaffServicesResponse(
+            staffId=staff.id, allServices=staff.performs_all_services,
+            serviceIds=[] if staff.performs_all_services else sorted(ids, key=str),
+        )
+
+    async def set_staff_services(
+        self, business_id: str, user_id: str, staff_id: str, data: SetStaffServicesRequest
+    ) -> StaffServicesResponse:
+        business = await self._get_owned_business(business_id, user_id)
+        staff = await self._get_staff(business, staff_id)
+
+        wanted = list(dict.fromkeys(data.service_ids))
+        if data.all_services and wanted:
+            raise _validation_error("serviceIds must be empty when allServices is true")
+        if wanted:
+            owned = set(
+                (
+                    await self.db.execute(
+                        select(Service.id).where(Service.business_id == business.id, Service.id.in_(wanted))
+                    )
+                ).scalars()
+            )
+            unknown = [str(i) for i in wanted if i not in owned]
+            if unknown:
+                raise _validation_error(f"serviceIds contains services not in this business: {', '.join(unknown)}")
+
+        staff.performs_all_services = data.all_services
+        await self.db.execute(delete(StaffService).where(StaffService.staff_id == staff.id))
+        for service_id in wanted:
+            self.db.add(StaffService(staff_id=staff.id, service_id=service_id))
+        await self.db.commit()
+        return StaffServicesResponse(staffId=staff.id, allServices=staff.performs_all_services, serviceIds=wanted)
 
     # ─── team members (post-publish roster) ──────────────────
     # The invitation is the roster record: pending until accepted, then the
@@ -897,7 +1356,9 @@ class BusinessService:
             )
             .order_by(TeamInvitation.sent_at)
         )
-        return ListTeamMembersResponse(members=[team_member_response(i) for i in result.scalars()])
+        invitations = result.scalars().all()
+        avatars = await staff_avatar_map(self.db, [i.staff_id for i in invitations])
+        return ListTeamMembersResponse(members=[team_member_response(i, avatars.get(i.staff_id)) for i in invitations])
 
     async def add_team_member(self, business_id: str, user_id: str, data: AddTeamMemberRequest) -> TeamMemberResponse:
         business = await self._get_owned_business(business_id, user_id)
@@ -906,7 +1367,9 @@ class BusinessService:
             user_id,
             data,
             name=data.name,
-            commission_percent=data.commission_percent,
+            commission_percent=None if data.role == "front_desk" else (
+                DEFAULT_COMMISSION if data.commission_percent is None else data.commission_percent
+            ),
             working_days=self._normalise_days(data.working_days),
         )
         return team_member_response(invitation)
@@ -917,29 +1380,103 @@ class BusinessService:
         business = await self._get_owned_business(business_id, user_id)
         invitation = await self._get_member(business, invitation_id)
 
+        # Once accepted, Staff is the source of truth; keep the roster record in step.
+        staff = await self.db.get(Staff, invitation.staff_id) if invitation.staff_id else None
         fields = data.model_fields_set
+        if fields & {"takes_appointments", "front_desk_access"}:
+            await self._set_member_modes(invitation, staff, data)
         if "commission_percent" in fields:
             if data.commission_percent is None:
                 raise _validation_error("commissionPercent must be between 0 and 100")
-            invitation.commission_percent = data.commission_percent
+            if invitation.role != "front_desk":
+                invitation.commission_percent = data.commission_percent
+                if staff:
+                    staff.commission_percent = data.commission_percent
         if "working_days" in fields:
             invitation.working_days = self._normalise_days(data.working_days)
+            if staff:
+                staff.working_days = invitation.working_days
 
         await self.db.commit()
         await self.db.refresh(invitation)
-        return team_member_response(invitation)
+        return team_member_response(invitation, staff.avatar_url if staff else None)
+
+    async def _set_member_modes(self, invitation: TeamInvitation, staff: Optional[Staff], data: UpdateTeamMemberRequest) -> None:
+        """What a member does: takes appointments (role staff), runs the front desk, or both."""
+        fields = data.model_fields_set
+        takes = invitation.role != "front_desk" if data.takes_appointments is None else data.takes_appointments
+        desk = invitation.front_desk_access if data.front_desk_access is None else data.front_desk_access
+        if "takes_appointments" in fields and data.takes_appointments is None or (
+            "front_desk_access" in fields and data.front_desk_access is None
+        ):
+            raise _validation_error("takesAppointments and frontDeskAccess must be true or false")
+        if not takes and not desk:
+            raise _validation_error("A team member must take appointments, run the front desk, or both")
+
+        role = "staff" if takes else "front_desk"
+        if role == "front_desk" and invitation.role != "front_desk" and staff is not None:
+            from app.modules.booking.models import Booking, BookingStatus
+            # Desk only means no appointments: theirs must be moved or cancelled first.
+            upcoming = (
+                await self.db.execute(
+                    select(func.count()).select_from(Booking).where(
+                        Booking.staff_id == staff.id,
+                        Booking.status.in_([BookingStatus.CONFIRMED, BookingStatus.IN_PROGRESS, BookingStatus.PENDING_PAYMENT]),
+                    )
+                )
+            ).scalar_one()
+            if upcoming:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "has_upcoming_bookings",
+                        "message": f"They still have {upcoming} upcoming appointment{'s' if upcoming != 1 else ''}; reassign or cancel them first",
+                        "count": upcoming,
+                    },
+                )
+
+        if role != invitation.role:
+            if role == "front_desk":
+                commission = None
+            else:
+                commission = DEFAULT_COMMISSION if data.commission_percent is None else data.commission_percent
+            invitation.commission_percent = commission
+            if staff:
+                staff.commission_percent = commission
+                if role == "front_desk":
+                    staff.performs_all_services = False
+                    await self.db.execute(delete(StaffService).where(StaffService.staff_id == staff.id))
+                else:
+                    # Bookable again: every service, until the owner narrows it.
+                    staff.performs_all_services = True
+        invitation.role = role
+        invitation.front_desk_access = role == "front_desk" or desk
+        if staff:
+            staff.role = role
+            staff.front_desk_access = invitation.front_desk_access
 
     async def remove_team_member(self, business_id: str, user_id: str, invitation_id: str) -> None:
         """Cancels a pending invitation, or removes an accepted member from the team."""
         business = await self._get_owned_business(business_id, user_id)
         invitation = await self._get_member(business, invitation_id)
 
-        if invitation.status == InvitationStatus.ACCEPTED and invitation.user_id:
-            await self.db.execute(
-                delete(Staff).where(Staff.business_id == business.id, Staff.user_id == invitation.user_id)
-            )
+        if invitation.staff_id:
+            leaving = Staff.id == invitation.staff_id
+        elif invitation.status == InvitationStatus.ACCEPTED and invitation.user_id:
+            # Accepted before invitations were linked to Staff (pre-006 rows the backfill missed).
+            leaving = Staff.user_id == invitation.user_id
+        else:
+            leaving = None
+        keys = []
+        if leaving is not None:
+            staff_ids = list((await self.db.execute(select(Staff.id).where(Staff.business_id == business.id, leaving))).scalars())
+            # Their portfolio goes with them, files included.
+            keys = await self._delete_portfolio_files(staff_ids)
+            await self.db.execute(delete(Staff).where(Staff.business_id == business.id, leaving))
         await self.db.delete(invitation)
         await self.db.commit()
+        for key in keys:
+            await delete_stored_object.enqueue(key=key)
 
     async def _get_member(self, business: Business, invitation_id: str) -> TeamInvitation:
         invitation = await self.db.get(TeamInvitation, self._parse_path_id(invitation_id, "invitationId"))
@@ -996,29 +1533,7 @@ class BusinessService:
                 )
 
             if business.team_mode != TeamMode.TEAM:
-                existing_staff = await self.db.execute(
-                    select(Staff).where(
-                        Staff.business_id == business.id,
-                        Staff.user_id == business.owner_id,
-                    )
-                )
-                if not existing_staff.scalar_one_or_none():
-                    owner = await self.db.get(User, business.owner_id)
-                    owner_name = ""
-                    if owner:
-                        owner_name = " ".join(
-                            p for p in (owner.first_name, owner.last_name) if p
-                        ) or owner.email or "Owner"
-                    self.db.add(
-                        Staff(
-                            business_id=business.id,
-                            user_id=business.owner_id,
-                            name=owner_name or "Owner",
-                            role="owner",
-                            specialties=[],
-                            portfolio=[],
-                        )
-                    )
+                await self._ensure_owner_staff(business)
 
         business.status = BusinessStatus.PUBLISHED if data.visible else BusinessStatus.DRAFT
         business.published_at = datetime.now(timezone.utc) if data.visible else None
@@ -1032,6 +1547,28 @@ class BusinessService:
             publishedAt=business.published_at,
         )
 
+    async def _ensure_owner_staff(self, business: Business) -> None:
+        """The owner's own Staff row (role "owner"), so a solo business has someone to book."""
+        existing = await self.db.execute(
+            select(Staff.id).where(Staff.business_id == business.id, Staff.user_id == business.owner_id)
+        )
+        if existing.first():
+            return
+        owner = await self.db.get(User, business.owner_id)
+        owner_name = ""
+        if owner:
+            owner_name = " ".join(p for p in (owner.first_name, owner.last_name) if p) or owner.email or "Owner"
+        self.db.add(
+            Staff(
+                business_id=business.id,
+                user_id=business.owner_id,
+                name=owner_name or "Owner",
+                role="owner",
+                specialties=[],
+                portfolio=[],
+            )
+        )
+
     # ─── My Businesses ────────────────────────────────────────
 
     async def list_my_businesses(self, user_id: uuid_pkg.UUID):
@@ -1041,25 +1578,36 @@ class BusinessService:
             .where(Business.owner_id == user_id)
             .order_by(Business.created_at.asc())
         )
-        items = [
-            MyBusinessResponse(businessId=b.id, name=b.name, status=b.status, role="owner")
-            for b in owned.scalars()
-        ]
-        owned_ids = {item.business_id for item in items}
+        owned_businesses = owned.scalars().all()
+        memberships = (
+            await self.db.execute(
+                select(Staff, Business)
+                .join(Business, Business.id == Staff.business_id)
+                .where(Staff.user_id == user_id)
+                .order_by(Staff.created_at.asc())
+            )
+        ).all()
+        # Owners also get a Staff row (role "owner") on their own business when they work solo.
+        my_staff = {business.id: staff for staff, business in memberships}
 
-        memberships = await self.db.execute(
-            select(Staff, Business)
-            .join(Business, Business.id == Staff.business_id)
-            .where(Staff.user_id == user_id)
-            .order_by(Staff.created_at.asc())
-        )
-        for staff, business in memberships.all():
-            # Owners also get a Staff row (role "owner") on their own business when it's published.
-            if business.id in owned_ids:
+        items = [
+            MyBusinessResponse(
+                businessId=b.id, name=b.name, status=b.status, role="owner",
+                staffId=my_staff[b.id].id if b.id in my_staff else None,
+                suspendedAt=b.suspended_at, suspendedReason=b.suspended_reason,
+            )
+            for b in owned_businesses
+        ]
+        seen = {item.business_id for item in items}
+        for staff, business in memberships:
+            if business.id in seen:
                 continue
-            owned_ids.add(business.id)
+            seen.add(business.id)
+            desk = staff.role == "front_desk" or bool(staff.front_desk_access)
+            modes = (["staff"] if staff.role != "front_desk" else []) + (["front_desk"] if desk else [])
             items.append(MyBusinessResponse(
-                businessId=business.id, name=business.name, status=business.status, role=staff.role,
+                businessId=business.id, name=business.name, status=business.status, role=staff.role, staffId=staff.id,
+                frontDeskAccess=desk, modes=modes, suspendedAt=business.suspended_at,
             ))
         return ListMyBusinessesResponse(businesses=items)
 
@@ -1068,14 +1616,12 @@ class BusinessService:
     async def list_my_invitations(self, user_id: str):
         from app.modules.business.schemas import ListMyInvitationsResponse, MyInvitationResponse
         user = await self.db.get(User, user_id)
-        if not user or not user.phone:
+        mine = invitations_for(user) if user else None
+        if mine is None:
             return ListMyInvitationsResponse(invitations=[])
         result = await self.db.execute(
             select(TeamInvitation)
-            .where(
-                TeamInvitation.status == InvitationStatus.PENDING,
-                TeamInvitation.phone == user.phone,
-            )
+            .where(TeamInvitation.status == InvitationStatus.PENDING, mine)
             .order_by(TeamInvitation.sent_at.desc())
         )
         invitations = result.scalars().all()
@@ -1100,34 +1646,47 @@ class BusinessService:
         if invitation.status != InvitationStatus.PENDING:
             raise HTTPException(status_code=409, detail={"error": "already_responded", "message": "This invitation has already been accepted or declined"})
         user = await self.db.get(User, user_id)
-        if not user or not user.phone or user.phone != invitation.phone:
+        mine = invitations_for(user) if user else None
+        if mine is None or not (
+            await self.db.execute(select(TeamInvitation.id).where(TeamInvitation.id == invitation.id, mine))
+        ).first():
             raise HTTPException(status_code=404, detail={"error": "not_found", "message": "No pending invitation found for this id"})
         if data.action == "accept":
             invitation.status = InvitationStatus.ACCEPTED
             invitation.user_id = user_id
 
-            existing_staff = await self.db.execute(
-                select(Staff).where(
-                    Staff.business_id == invitation.business_id,
-                    Staff.user_id == uuid_pkg.UUID(str(user_id)),
+            staff = (
+                await self.db.execute(
+                    select(Staff).where(
+                        Staff.business_id == invitation.business_id,
+                        Staff.user_id == uuid_pkg.UUID(str(user_id)),
+                    )
                 )
-            )
-            if not existing_staff.scalar_one_or_none():
+            ).scalar_one_or_none()
+            if not staff:
                 member_name = (
                     " ".join(p for p in (user.first_name, user.last_name) if p)
+                    or invitation.name
                     or user.email
                     or "Team member"
                 )
-                self.db.add(
-                    Staff(
-                        business_id=invitation.business_id,
-                        user_id=uuid_pkg.UUID(str(user_id)),
-                        name=member_name,
-                        role=invitation.role,
-                        specialties=[],
-                        portfolio=[],
-                    )
+                staff = Staff(
+                    id=uuid_pkg.uuid4(),
+                    business_id=invitation.business_id,
+                    user_id=uuid_pkg.UUID(str(user_id)),
+                    name=member_name,
+                    role=invitation.role,
+                    specialties=[],
+                    portfolio=[],
+                    # Desk-only members aren't bookable (no services, no commission).
+                    performs_all_services=invitation.role != "front_desk",
                 )
+                self.db.add(staff)
+            # Staff becomes this member's bookable identity (docs/booking/PLAN.md, D3).
+            staff.working_days = invitation.working_days
+            staff.commission_percent = None if invitation.role == "front_desk" else invitation.commission_percent
+            staff.front_desk_access = invitation.role == "front_desk" or bool(invitation.front_desk_access)
+            invitation.staff_id = staff.id
         else:
             invitation.status = InvitationStatus.DECLINED
         await self.db.commit()
@@ -1147,81 +1706,39 @@ class BusinessService:
         price_max: Optional[int] = None,
         rating_min: Optional[float] = None,
         radius_km: Optional[float] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
     ) -> SearchResponse:
-        result = await self.db.execute(
-            select(Business)
-            .where(Business.status == BusinessStatus.PUBLISHED)
-            .options(
-                selectinload(Business.photos),
-                selectinload(Business.service_categories).selectinload(ServiceCategory.services),
-                selectinload(Business.reviews),
-            )
-        )
-        businesses = result.scalars().all()
+        """Filters and sorts the light card list (business_cards) in Python: one small dict per
+        published business, so this stays cheap per request whatever the location or filters.
+        Nearest first with a location, else newest. limit/offset page the result; total counts it."""
+        from app.modules.business.cards import card_summary, cached_cards
 
         has_coords = lat is not None and lng is not None
         q = query.strip().lower() if query else ""
 
         rows = []
-        for biz in businesses:
-            if category and category not in (biz.categories or []):
+        for card in await cached_cards(self.db):
+            if category and category not in card["categories"]:
                 continue
-
-            services = [s for cat in (biz.service_categories or []) for s in (cat.services or [])]
-
-            if q:
-                haystack = " ".join([biz.name, *[s.name for s in services]]).lower()
-                if q not in haystack:
-                    continue
-
-            if price_max is not None and not any(s.price_amount <= price_max for s in services):
+            if q and q not in card["haystack"]:
                 continue
-
-            reviews = list(biz.reviews or [])
-            rating = round(sum(r.rating for r in reviews) / len(reviews), 1) if reviews else 0.0
-            if rating_min is not None and rating < rating_min:
+            if price_max is not None and not (card["prices"] and card["prices"][0] <= price_max):
                 continue
-
-            loc = biz.location or {}
-            biz_lat = loc.get("lat", 0.0)
-            biz_lng = loc.get("lng", 0.0)
-            distance = round(haversine_km(lat, lng, biz_lat, biz_lng), 1) if has_coords else 0.0
+            if rating_min is not None and card["rating"] < rating_min:
+                continue
+            distance = round(haversine_km(lat, lng, card["lat"], card["lng"]), 1) if has_coords else 0.0
             if has_coords and radius_km is not None and distance > radius_km:
                 continue
-
-            photo_urls = [p.url for p in sorted(
-                biz.photos or [],
-                key=lambda p: (not p.is_cover, p.created_at),
-            )]
-            if services:
-                cheapest = min(services, key=lambda s: s.price_amount)
-                starting_price = MoneyResponse(amount=cheapest.price_amount, currency=cheapest.price_currency)
-            else:
-                starting_price = MoneyResponse(amount=0, currency="KES")
-
-            summary = BusinessSummaryResponse(
-                businessId=biz.id,
-                name=biz.name,
-                categories=biz.categories or [],
-                thumbnailUrl=photo_urls[0] if photo_urls else "",
-                photos=photo_urls,
-                address=loc.get("address", ""),
-                lat=biz_lat,
-                lng=biz_lng,
-                distanceKm=distance,
-                startingPrice=starting_price,
-                rating=rating,
-                reviewCount=len(reviews),
-            )
-            published_ts = biz.published_at.timestamp() if biz.published_at else 0.0
-            rows.append((distance, published_ts, summary))
+            rows.append((distance, card["publishedTs"], card))
 
         if has_coords:
             rows.sort(key=lambda r: r[0])
         else:
             rows.sort(key=lambda r: r[1], reverse=True)
 
-        return SearchResponse(businesses=[r[2] for r in rows])
+        page = rows[offset:offset + limit] if limit is not None else rows[offset:]
+        return SearchResponse(businesses=[card_summary(c, d) for d, _, c in page], total=len(rows))
 
     # ─── Discovery: profile ────────────────────────────────────
 
@@ -1237,31 +1754,33 @@ class BusinessService:
 
         result = await self.db.execute(
             select(Business)
-            .where(Business.id == bid, Business.status == BusinessStatus.PUBLISHED)
+            .where(Business.id == bid, Business.status == BusinessStatus.PUBLISHED, Business.suspended_at.is_(None))
             .options(
                 selectinload(Business.photos),
                 selectinload(Business.working_hours),
                 selectinload(Business.service_categories).selectinload(ServiceCategory.services),
                 selectinload(Business.policies),
                 selectinload(Business.staff),
-                selectinload(Business.reviews),
             )
         )
         business = result.scalar_one_or_none()
         if not business:
             raise not_found
 
+        # Counted by the database, and only the latest few loaded: a popular business can have
+        # thousands of reviews ("See all" pages through GET /businesses/{id}/reviews).
+        review_count, review_avg = (await self.db.execute(
+            select(func.count(Review.id), func.avg(Review.rating)).where(Review.business_id == business.id, Review.hidden_at.is_(None))
+        )).one()
+        latest_reviews = (await self.db.execute(
+            select(Review).where(Review.business_id == business.id, Review.hidden_at.is_(None))
+            .order_by(Review.created_at.desc()).limit(PROFILE_REVIEWS)
+        )).scalars().all()
+
         loc = business.location or {}
         policies = business.policies
 
-        reviews_sorted = sorted(
-            business.reviews or [], key=lambda r: r.created_at, reverse=True
-        )
-        rating = (
-            round(sum(r.rating for r in reviews_sorted) / len(reviews_sorted), 1)
-            if reviews_sorted
-            else 0.0
-        )
+        rating = round(float(review_avg), 1) if review_count else 0.0
 
         photo_urls = [p.url for p in sorted(
             business.photos or [],
@@ -1295,30 +1814,32 @@ class BusinessService:
             for s in (cat.services or [])
         ]
 
+        # Customers only see people they could book: front desk is staff-facing only.
+        staff_rows = sorted((st for st in business.staff or [] if st.role != "front_desk"), key=lambda st: st.created_at)
+        mapped = await self.staff_service_ids([st.id for st in staff_rows if not st.performs_all_services])
+        portfolios = await self.staff_portfolio_urls([st.id for st in staff_rows])
         staff = [
             StaffMemberResponse(
                 staffId=st.id,
                 name=st.name,
                 role=st.role,
+                workingDays=st.working_days,
+                allServices=st.performs_all_services,
+                serviceIds=sorted(mapped.get(st.id, []), key=str),
                 rating=st.rating,
                 avatarUrl=st.avatar_url,
                 bio=st.bio or "",
                 specialties=st.specialties or [],
-                portfolio=st.portfolio or [],
+                # Uploaded photos (newest first), then any legacy list.
+                portfolio=portfolios.get(st.id, []) + (st.portfolio or []),
             )
-            for st in sorted(business.staff or [], key=lambda st: st.created_at)
+            for st in staff_rows
         ]
 
-        review_items = [
-            ReviewResponse(
-                reviewId=r.id,
-                authorName=r.author_name,
-                rating=r.rating,
-                text=r.text or "",
-                createdAt=r.created_at,
-            )
-            for r in reviews_sorted
-        ]
+        # The latest few with full detail; "See all" pages through GET /businesses/{id}/reviews.
+        from app.modules.booking.reviews import review_details
+
+        review_items = await review_details(self.db, list(latest_reviews))
 
         return BusinessProfileResponse(
             businessId=business.id,
@@ -1327,7 +1848,7 @@ class BusinessService:
             categories=business.categories or [],
             photos=photo_urls,
             rating=rating,
-            reviewCount=len(reviews_sorted),
+            reviewCount=review_count,
             address=loc.get("address", ""),
             lat=loc.get("lat", 0.0),
             lng=loc.get("lng", 0.0),

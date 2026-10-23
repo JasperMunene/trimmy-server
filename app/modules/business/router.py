@@ -1,15 +1,21 @@
+import uuid as uuid_pkg
 from typing import Optional
-from fastapi import APIRouter, Depends, UploadFile, File, Form
+from fastapi import APIRouter, Depends, UploadFile, File, Form, Query
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import cache
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.dependencies import get_current_user, get_current_verified_user
 from app.modules.auth.models import User
 from app.modules.business import payment_options
 from app.modules.business.schemas import (
     AddTeamMemberRequest,
+    BookingSettingsResponse,
     BusinessProfileResponse,
     CompletePhotoUploadRequest,
+    CompletePortfolioUploadRequest,
     CreateBusinessRequest,
     CreateBusinessResponse,
     CreateServiceCategoryRequest,
@@ -17,6 +23,7 @@ from app.modules.business.schemas import (
     GetBusinessResponse,
     InviteTeamMemberRequest,
     ListMyBusinessesResponse,
+    MyStaffServicesResponse,
     ListMyInvitationsResponse,
     ListServiceCategoriesResponse,
     ListTeamMembersResponse,
@@ -26,6 +33,8 @@ from app.modules.business.schemas import (
     PhotoUploadUrlRequest,
     PhotoUploadUrlResponse,
     PoliciesResponse,
+    PortfolioPhotoResponse,
+    PortfolioResponse,
     PublishBusinessRequest,
     PublishBusinessResponse,
     RespondToInvitationRequest,
@@ -35,9 +44,12 @@ from app.modules.business.schemas import (
     ServiceResponse,
     SetPaymentDestinationRequest,
     SetPoliciesRequest,
+    SetStaffServicesRequest,
     SetTeamModeRequest,
+    StaffServicesResponse,
     TeamMemberResponse,
     TeamModeResponse,
+    UpdateBookingSettingsRequest,
     UpdateBusinessResponse,
     UpdateServiceRequest,
     UpdateTeamMemberRequest,
@@ -73,6 +85,8 @@ async def search_businesses(
     priceMax: Optional[int] = None,
     ratingMin: Optional[float] = None,
     radiusKm: Optional[float] = None,
+    limit: Optional[int] = Query(None, ge=1, le=100, description="Page size; omit for every match"),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
     service = BusinessService(db)
@@ -84,6 +98,8 @@ async def search_businesses(
         price_max=priceMax,
         rating_min=ratingMin,
         radius_km=radiusKm,
+        limit=limit,
+        offset=offset,
     )
 
 
@@ -92,8 +108,17 @@ async def get_business_profile(
     business_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    service = BusinessService(db)
-    return await service.get_business_profile(business_id)
+    """Served from the shared cache when it's there (cleared when the business changes)."""
+    try:
+        key = cache.profile_key(await cache.generation(), str(uuid_pkg.UUID(business_id)))
+    except ValueError:
+        key = None  # not an id: the service answers 404
+    if key and (hit := await cache.get(key)) is not None:
+        return JSONResponse(hit)
+    profile = (await BusinessService(db).get_business_profile(business_id)).model_dump(mode="json", by_alias=True)
+    if key:
+        await cache.put(key, profile, settings.CACHE_PROFILE_SECONDS)
+    return JSONResponse(profile)
 
 
 @router.post("", status_code=201, response_model=CreateBusinessResponse)
@@ -297,6 +322,109 @@ async def invite_team_member(
     return await service.invite_team_member(business_id, str(current_user.id), data)
 
 
+@router.patch("/{business_id}/booking-settings", response_model=BookingSettingsResponse)
+async def update_booking_settings(
+    business_id: str,
+    data: UpdateBookingSettingsRequest,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Timezone and slot rules used by availability. Current values are in GET /businesses/{id}."""
+    service = BusinessService(db)
+    return await service.update_booking_settings(business_id, str(current_user.id), data)
+
+
+@router.get("/{business_id}/staff/{staff_id}/services", response_model=StaffServicesResponse)
+async def get_staff_services(
+    business_id: str,
+    staff_id: str,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = BusinessService(db)
+    return await service.get_staff_services(business_id, str(current_user.id), staff_id)
+
+
+@router.put("/{business_id}/staff/{staff_id}/services", response_model=StaffServicesResponse)
+async def set_staff_services(
+    business_id: str,
+    staff_id: str,
+    data: SetStaffServicesRequest,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Which services this staff member performs (drives availability and booking)."""
+    service = BusinessService(db)
+    return await service.set_staff_services(business_id, str(current_user.id), staff_id, data)
+
+
+# ─── Staff portfolio: the member themselves, or the owner ────
+
+
+@router.get("/{business_id}/staff/{staff_id}/portfolio", response_model=PortfolioResponse)
+async def get_portfolio(
+    business_id: str,
+    staff_id: str,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """A staff member's portfolio photos, newest first, for managing them."""
+    service = BusinessService(db)
+    return await service.get_portfolio(business_id, str(current_user.id), staff_id)
+
+
+@router.post("/{business_id}/staff/{staff_id}/portfolio/upload-url", response_model=PhotoUploadUrlResponse)
+async def create_portfolio_upload_url(
+    business_id: str,
+    staff_id: str,
+    data: PhotoUploadUrlRequest,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Step 1 of a direct upload: get a presigned URL, then PUT the file to it
+    with exactly the returned headers, then call POST /portfolio/complete."""
+    service = BusinessService(db)
+    return await service.create_portfolio_upload_url(business_id, str(current_user.id), staff_id, data)
+
+
+@router.post("/{business_id}/staff/{staff_id}/portfolio/complete", status_code=201, response_model=PortfolioPhotoResponse)
+async def complete_portfolio_upload(
+    business_id: str,
+    staff_id: str,
+    data: CompletePortfolioUploadRequest,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Step 2 of a direct upload: add the uploaded file to the portfolio."""
+    service = BusinessService(db)
+    return await service.complete_portfolio_upload(business_id, str(current_user.id), staff_id, data)
+
+
+@router.post("/{business_id}/staff/{staff_id}/portfolio", status_code=201, response_model=PortfolioPhotoResponse)
+async def upload_portfolio_photo(
+    business_id: str,
+    staff_id: str,
+    photo: UploadFile = File(...),
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload through the API (multipart). Prefer the direct upload-url flow."""
+    service = BusinessService(db)
+    return await service.upload_portfolio_photo(business_id, str(current_user.id), staff_id, photo)
+
+
+@router.delete("/{business_id}/staff/{staff_id}/portfolio/{photo_id}", status_code=204)
+async def delete_portfolio_photo(
+    business_id: str,
+    staff_id: str,
+    photo_id: str,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = BusinessService(db)
+    await service.delete_portfolio_photo(business_id, str(current_user.id), staff_id, photo_id)
+
+
 @router.get("/{business_id}/team/members", response_model=ListTeamMembersResponse)
 async def list_team_members(
     business_id: str,
@@ -362,6 +490,17 @@ async def list_my_businesses(
 ):
     service = BusinessService(db)
     return await service.list_my_businesses(current_user.id)
+
+
+@team_router.get("/me/staff-services", response_model=MyStaffServicesResponse)
+async def my_staff_services(
+    business_id: str = Query(..., alias="businessId"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Staff / front desk: the services I've been assigned at this business."""
+    service = BusinessService(db)
+    return await service.my_staff_services(current_user.id, business_id)
 
 
 # ─── Team Invitations (received) ──────────────────────────────

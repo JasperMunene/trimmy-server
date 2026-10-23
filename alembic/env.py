@@ -14,6 +14,16 @@ from app.core.config import settings
 from app.core.base import Base
 import app.modules.auth.models  # noqa: F401
 import app.modules.business.models  # noqa: F401
+import app.modules.booking.models  # noqa: F401
+import app.modules.payments.models  # noqa: F401
+import app.modules.customers.models  # noqa: F401
+import app.modules.payouts.models  # noqa: F401
+import app.modules.notifications.models  # noqa: F401
+import app.modules.daysummary.models  # noqa: F401
+import app.modules.favorites.models  # noqa: F401
+import app.modules.support.models  # noqa: F401
+import app.modules.safety.models  # noqa: F401
+import app.core.audit  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)

@@ -11,12 +11,33 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from slowapi.errors import RateLimitExceeded
 
 from app.core.config import settings
+from app.core import cache_invalidation  # noqa: F401  (clears cached discovery data on commit)
 from app.core.rate_limit import limiter
 from app.core.storage import LocalStorage, get_storage
 from app.workers.broker import publisher
 from app.modules.auth.router import router as auth_router
+from app.modules.admin.auth import router as admin_auth_router
+from app.modules.admin.router import router as admin_router
+from app.modules.admin.lookup import router as admin_lookup_router
+from app.modules.support.router import router as support_router
+from app.modules.support.admin import router as admin_support_router
+from app.modules.safety.router import router as reports_router
+from app.modules.safety.admin import router as admin_safety_router
+from app.modules.booking.router import availability_router, bookings_router, my_bookings_router, visits_router
+from app.modules.booking.time_off import router as time_off_router
+from app.modules.customers.router import router as customers_router
+from app.modules.favorites.router import router as favorites_router
+from app.modules.payouts.router import router as payouts_router
+from app.modules.earnings.router import router as earnings_router
+from app.modules.notifications.router import router as push_router
+from app.modules.notifications.preferences import router as notification_prefs_router
+from app.modules.notifications.inbox import events_router, inbox_router
+from app.modules.notifications.realtime import hub as realtime_hub
+from app.modules.daysummary.router import router as day_summary_router
 from app.modules.business.router import discovery_router
 from app.modules.business.router import options_router
+from app.modules.payments.router import booking_payments_router, visit_payments_router
+from app.modules.payments.router import router as payments_router
 from app.modules.business.router import router as business_router
 from app.modules.business.router import team_router
 
@@ -32,6 +53,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     await publisher.start()
     yield
+    await realtime_hub.stop()
     await publisher.stop()
 
 
@@ -72,12 +94,37 @@ app.add_middleware(
 )
 
 app.include_router(auth_router, prefix=settings.API_V1_STR)
+app.include_router(admin_auth_router, prefix=settings.API_V1_STR)
+app.include_router(admin_router, prefix=settings.API_V1_STR)
+app.include_router(admin_lookup_router, prefix=settings.API_V1_STR)
+app.include_router(support_router, prefix=settings.API_V1_STR)
+app.include_router(admin_support_router, prefix=settings.API_V1_STR)
+app.include_router(reports_router, prefix=settings.API_V1_STR)
+app.include_router(admin_safety_router, prefix=settings.API_V1_STR)
 # discovery_router must precede business_router: its GET /businesses/search
 # would otherwise match the authed GET /businesses/{business_id} route.
 app.include_router(discovery_router, prefix=settings.API_V1_STR)
+# Public like discovery, and before business_router for the same reason.
+app.include_router(availability_router, prefix=settings.API_V1_STR)
+app.include_router(customers_router, prefix=settings.API_V1_STR)
+app.include_router(favorites_router, prefix=settings.API_V1_STR)
+app.include_router(payouts_router, prefix=settings.API_V1_STR)
+app.include_router(earnings_router, prefix=settings.API_V1_STR)
+app.include_router(push_router, prefix=settings.API_V1_STR)
+app.include_router(notification_prefs_router, prefix=settings.API_V1_STR)
+app.include_router(inbox_router, prefix=settings.API_V1_STR)
+app.include_router(events_router, prefix=settings.API_V1_STR)
+app.include_router(day_summary_router, prefix=settings.API_V1_STR)
+app.include_router(time_off_router, prefix=settings.API_V1_STR)
 app.include_router(business_router, prefix=settings.API_V1_STR)
 app.include_router(team_router, prefix=settings.API_V1_STR)
 app.include_router(options_router, prefix=settings.API_V1_STR)
+app.include_router(payments_router, prefix=settings.API_V1_STR)
+app.include_router(bookings_router, prefix=settings.API_V1_STR)
+app.include_router(booking_payments_router, prefix=settings.API_V1_STR)
+app.include_router(visit_payments_router, prefix=settings.API_V1_STR)
+app.include_router(my_bookings_router, prefix=settings.API_V1_STR)
+app.include_router(visits_router, prefix=settings.API_V1_STR)
 
 if isinstance(get_storage(), LocalStorage):
     # Dev only: serve locally stored uploads. With R2, files are served by R2 itself.

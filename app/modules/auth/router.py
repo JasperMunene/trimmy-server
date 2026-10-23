@@ -1,7 +1,7 @@
 import logging
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,7 +48,8 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
 @router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
-async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit(settings.RATE_LIMIT_REGISTER)
+async def register(request: Request, data: RegisterRequest, db: AsyncSession = Depends(get_db)):
     service = AuthService(db)
     return await service.register(data)
 
@@ -63,8 +64,9 @@ async def request_email_otp(
 
 
 @router.post("/complete-registration", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit(settings.RATE_LIMIT_REGISTER)
 async def complete_registration(
-    data: CompleteRegistrationRequest, db: AsyncSession = Depends(get_db)
+    request: Request, data: CompleteRegistrationRequest, db: AsyncSession = Depends(get_db)
 ):
     service = AuthService(db)
     return await service.complete_registration(data)
@@ -80,8 +82,9 @@ async def request_phone_otp(
 
 
 @router.post("/complete-phone-registration", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit(settings.RATE_LIMIT_REGISTER)
 async def complete_phone_registration(
-    data: CompletePhoneRegistrationRequest, db: AsyncSession = Depends(get_db)
+    request: Request, data: CompletePhoneRegistrationRequest, db: AsyncSession = Depends(get_db)
 ):
     service = AuthService(db)
     return await service.complete_phone_registration(data)
@@ -89,7 +92,8 @@ async def complete_phone_registration(
 
 
 @router.post("/login", response_model=AuthResponse)
-async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit(settings.RATE_LIMIT_LOGIN)
+async def login(request: Request, data: LoginRequest, db: AsyncSession = Depends(get_db)):
     service = AuthService(db)
     return await service.login(data)
 
@@ -112,7 +116,8 @@ async def logout(
 
 
 @router.post("/verify-email", response_model=AuthResponse)
-async def verify_email(data: VerifyEmailRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit(settings.RATE_LIMIT_CHECK_EMAIL)
+async def verify_email(request: Request, data: VerifyEmailRequest, db: AsyncSession = Depends(get_db)):
     service = AuthService(db)
     return await service.verify_email(data)
 
@@ -130,6 +135,32 @@ async def update_me(
 ):
     service = AuthService(db)
     return await service.update_me(current_user, data)
+
+
+@router.put("/me/avatar", response_model=UserResponse)
+async def upload_avatar(
+    photo: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Set your profile picture (JPEG or PNG, up to 10 MB). It's cropped square and stored as a
+    small JPEG, and shows on your staff profile at every business you work at."""
+    from app.modules.auth.avatar import AvatarService
+    return await AvatarService(db).upload(current_user, photo)
+
+
+@router.post("/me/avatar/google", response_model=UserResponse)
+async def use_google_avatar(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Use the picture on your Google account (has_google_picture is true after a Google sign-in)."""
+    from app.modules.auth.avatar import AvatarService
+    return await AvatarService(db).from_google(current_user)
+
+
+@router.delete("/me/avatar", response_model=UserResponse)
+async def remove_avatar(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Remove your profile picture (your initials show instead)."""
+    from app.modules.auth.avatar import AvatarService
+    return await AvatarService(db).remove(current_user)
 
 
 @router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
@@ -161,25 +192,29 @@ async def check_email(request: Request, data: CheckEmailRequest, db: AsyncSessio
 
 
 @router.post("/forgot-password", response_model=MessageResponse)
-async def forgot_password(data: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit(settings.RATE_LIMIT_CHECK_EMAIL)
+async def forgot_password(request: Request, data: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
     service = AuthService(db)
     return await service.forgot_password(data)
 
 
 @router.post("/verify-reset-otp", response_model=VerifyResetOtpResponse)
-async def verify_reset_otp(data: VerifyResetOtpRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit(settings.RATE_LIMIT_CHECK_EMAIL)
+async def verify_reset_otp(request: Request, data: VerifyResetOtpRequest, db: AsyncSession = Depends(get_db)):
     service = AuthService(db)
     return await service.verify_reset_otp(data)
 
 
 @router.post("/reset-password", response_model=MessageResponse)
-async def reset_password(data: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit(settings.RATE_LIMIT_CHECK_EMAIL)
+async def reset_password(request: Request, data: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
     service = AuthService(db)
     return await service.reset_password(data)
 
 
 @router.post("/resend-otp", response_model=MessageResponse)
-async def resend_otp(data: ResendOtpRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit(settings.RATE_LIMIT_CHECK_EMAIL)
+async def resend_otp(request: Request, data: ResendOtpRequest, db: AsyncSession = Depends(get_db)):
     service = AuthService(db)
     return await service.resend_otp(data)
 
@@ -195,9 +230,13 @@ async def google_auth_url(
         pattern=r"^[A-Za-z0-9_-]{43}$",
         description="base64url(sha256(code_verifier)); send code_verifier to /google/exchange",
     ),
+    redirect_uri: Optional[str] = Query(
+        None, max_length=300,
+        description="web only: where to send the browser back to; must be on GOOGLE_WEB_REDIRECT_ALLOWLIST",
+    ),
 ):
     google.require_configured()
-    return GoogleAuthUrlResponse(url=google.build_auth_url(platform, code_challenge))
+    return GoogleAuthUrlResponse(url=google.build_auth_url(platform, code_challenge, redirect_uri))
 
 
 @router.get("/google/authorized", include_in_schema=False)
@@ -217,20 +256,22 @@ async def google_authorized(
             detail={"error": "invalid_state", "message": "Sign-in link is invalid or expired. Please try again."},
         )
     platform = payload["platform"]
+    back = payload.get("ru")  # where a web app asked to come back to (checked when the URL was made)
 
     if error or not code:
         # e.g. error=access_denied when the user cancels on Google's screen.
-        return RedirectResponse(google.client_redirect_url(platform, error=error or "missing_code"), status_code=302)
+        return RedirectResponse(google.client_redirect_url(platform, back, error=error or "missing_code"), status_code=302)
 
     try:
         exchange_code = await GoogleAuthService(db).complete_sign_in(code, payload)
     except GoogleAuthError as e:
         logger.warning(f"Google sign-in failed: {e.code}: {e}")
-        return RedirectResponse(google.client_redirect_url(platform, error=e.code), status_code=302)
+        return RedirectResponse(google.client_redirect_url(platform, back, error=e.code), status_code=302)
 
-    return RedirectResponse(google.client_redirect_url(platform, code=exchange_code), status_code=302)
+    return RedirectResponse(google.client_redirect_url(platform, back, code=exchange_code), status_code=302)
 
 
 @router.post("/google/exchange", response_model=AuthResponse)
-async def google_exchange(data: GoogleExchangeRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit(settings.RATE_LIMIT_LOGIN)
+async def google_exchange(request: Request, data: GoogleExchangeRequest, db: AsyncSession = Depends(get_db)):
     return await GoogleAuthService(db).exchange(data.code, data.code_verifier)

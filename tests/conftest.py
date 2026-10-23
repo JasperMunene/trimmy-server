@@ -6,7 +6,10 @@ import uuid
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
@@ -14,6 +17,24 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 # Never touch the real R2 bucket from tests, even though .env configures it.
 os.environ["STORAGE_BACKEND"] = "local"
 os.environ["MEDIA_ROOT"] = tempfile.mkdtemp(prefix="trimmy-test-media-")
+# .env holds production M-Pesa credentials: blank them so no test can ever send a real
+# STK push. Tests that need a provider swap in a fake (see tests/test_payments.py).
+os.environ["MPESA_ENV"] = "sandbox"
+# Same for every other outside service: with these blank, email and SMS are only logged
+# (see deliver() / deliver_sms()), so tests never message the made-up addresses and
+# phone numbers they use, some of which may belong to real people.
+EXTERNAL_SEND_SETTINGS = (
+    "MPESA_CONSUMER_KEY", "MPESA_CONSUMER_SECRET", "MPESA_SHORTCODE", "MPESA_PASSKEY",
+    "MPESA_CALLBACK_URL", "MPESA_CALLBACK_SECRET",
+    "RESEND_API_KEY", "SMS_API_KEY", "SMS_USER_ID", "SMS_PASSWORD",
+    "EXPO_PUSH_URL", "EXPO_ACCESS_TOKEN",
+)
+for _name in EXTERNAL_SEND_SETTINGS:
+    os.environ[_name] = ""
+# The live stream runs in-process in tests (no Redis needed).
+os.environ["REALTIME_BACKEND"] = "local"
+os.environ["RATE_LIMIT_STORAGE"] = "memory://"
+os.environ["CACHE_BACKEND"] = "local"
 
 from app.core.base import Base
 from app.core.database import get_db
@@ -22,8 +43,33 @@ from app.core.security import create_access_token, get_password_hash
 from app.modules.auth.models import AuthType, User
 from main import app
 
-engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+# Tests run on in-memory SQLite by default. Set TEST_DATABASE_URL to a throwaway
+# Postgres (postgresql+asyncpg://...) to run them there too, as CI does (BK-05).
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or "sqlite+aiosqlite:///:memory:"
+ON_POSTGRES = TEST_DATABASE_URL.startswith("postgresql")
+
+if ON_POSTGRES:
+    # Every test drops all tables. Refuse anything that isn't obviously a local or CI
+    # database, so a copied staging/production URL can never be wiped by a test run.
+    _host = make_url(TEST_DATABASE_URL).host or ""
+    if _host not in ("localhost", "127.0.0.1", "postgres") and os.environ.get("ALLOW_REMOTE_TEST_DB") != "1":
+        raise RuntimeError(
+            f"TEST_DATABASE_URL points at {_host!r}; tests drop every table, so only localhost/127.0.0.1/postgres "
+            "are allowed (set ALLOW_REMOTE_TEST_DB=1 to override for a disposable remote database)"
+        )
+    engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
+else:
+    engine = create_async_engine(TEST_DATABASE_URL)
 TestSessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+
+
+def pytest_collection_modifyitems(config, items):
+    if ON_POSTGRES:
+        return
+    skip = pytest.mark.skip(reason="needs Postgres: set TEST_DATABASE_URL (runs in CI)")
+    for item in items:
+        if "postgres_only" in item.keywords:
+            item.add_marker(skip)
 
 
 @pytest.fixture(scope="session")
@@ -38,9 +84,19 @@ def reset_rate_limits():
     limiter.reset()
 
 
+@pytest.fixture(autouse=True)
+def reset_cache():
+    from app.core import cache
+
+    cache.clear_local()
+
+
 @pytest_asyncio.fixture(autouse=True)
 async def setup_db():
     async with engine.begin() as conn:
+        if ON_POSTGRES:
+            # The bookings exclusion constraint (D9) needs it.
+            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS btree_gist"))
         await conn.run_sync(Base.metadata.create_all)
     yield
     async with engine.begin() as conn:

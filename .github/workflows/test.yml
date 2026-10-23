@@ -9,6 +9,26 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # SQLite is what developers run locally; Postgres is what we deploy on
+        # (and the only place the bookings exclusion constraint exists).
+        database: [sqlite, postgres]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: trimmy_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d trimmy_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -22,4 +42,5 @@ jobs:
           DATABASE_URL: "sqlite+aiosqlite:///:memory:"
           REDIS_URL: redis://localhost:6379/0
           PYTHONPATH: .
+          TEST_DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgresql+asyncpg://postgres:postgres@localhost:5432/trimmy_test' || '' }}
         run: pytest -v

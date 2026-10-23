@@ -38,9 +38,13 @@ jobs:
             git fetch origin sandbox
             git reset --hard origin/sandbox
 
+            # The values from GitHub go to .env.deploy, then merge into the server's .env:
+            # a secret/variable that's set replaces the value; one that's missing (empty)
+            # keeps what .env already has; keys only in .env stay. So values kept on the
+            # server by hand aren't wiped by a secret nobody added to GitHub.
             # Quoted delimiter: values are written literally, so a `$` in a
             # secret isn't expanded by the server's shell.
-            cat > .env <<'EOF'
+            cat > .env.deploy <<'EOF'
             DATABASE_URL=${{ secrets.DATABASE_URL }}
             SECRET_KEY=${{ secrets.SECRET_KEY }}
             REDIS_URL=redis://redis:6379/0
@@ -69,7 +73,41 @@ jobs:
             R2_PUBLIC_URL=${{ vars.R2_PUBLIC_URL }}
             R2_ACCESS_KEY_ID=${{ secrets.R2_ACCESS_KEY_ID }}
             R2_SECRET_ACCESS_KEY=${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+            # M-Pesa (Daraja STK push with payment routing)
+            MPESA_ENV=${{ vars.MPESA_ENV }}
+            MPESA_SHORTCODE=${{ vars.MPESA_SHORTCODE }}
+            MPESA_CALLBACK_URL=${{ vars.MPESA_CALLBACK_URL }}
+            MPESA_CONSUMER_KEY=${{ secrets.MPESA_CONSUMER_KEY }}
+            MPESA_CONSUMER_SECRET=${{ secrets.MPESA_CONSUMER_SECRET }}
+            MPESA_PASSKEY=${{ secrets.MPESA_PASSKEY }}
+            MPESA_CALLBACK_SECRET=${{ secrets.MPESA_CALLBACK_SECRET }}
+
+            # Notifications
+            EXPO_ACCESS_TOKEN=${{ secrets.EXPO_ACCESS_TOKEN }}
+            NOTIFY_PUSH_ENABLED=${{ vars.NOTIFY_PUSH_ENABLED }}
+            GOOGLE_WEB_REDIRECT_ALLOWLIST=${{ vars.GOOGLE_WEB_REDIRECT_ALLOWLIST }}
             EOF
+
+            touch .env
+            awk '
+              FNR == NR {
+                if (match($0, /^[A-Za-z_][A-Za-z0-9_]*=/)) {
+                  k = substr($0, 1, RLENGTH - 1); old[k] = substr($0, RLENGTH + 1); keys[++n] = k
+                }
+                next
+              }
+              match($0, /^[A-Za-z_][A-Za-z0-9_]*=/) {
+                k = substr($0, 1, RLENGTH - 1); v = substr($0, RLENGTH + 1)
+                if (v == "" && (k in old)) v = old[k]
+                print k "=" v; seen[k] = 1; next
+              }
+              { print }
+              END { for (i = 1; i <= n; i++) if (!(keys[i] in seen)) print keys[i] "=" old[keys[i]] }
+            ' .env .env.deploy > .env.new
+            mv .env.new .env
+            rm -f .env.deploy
+            chmod 600 .env
 
             echo "=== Running migrations ==="
             docker compose -f docker-compose.staging.yml run --rm app alembic upgrade head

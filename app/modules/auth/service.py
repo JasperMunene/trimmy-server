@@ -13,6 +13,8 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.dependencies import account_disabled
+from app.core.rate_limit import clear_login_failures, login_locked, record_login_failure
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -170,6 +172,9 @@ class AuthService:
         user.phone = data.phone
         user.verified = True
         user.verified_at = datetime.now(timezone.utc)
+        # Bookings a business made for this proven phone / email become theirs (customer_match.py).
+        from app.modules.booking.customer_match import claim_bookings
+        await claim_bookings(self.db, user)
 
         await self.db.delete(auth_token)
         tokens = self._issue_tokens(user)
@@ -268,6 +273,10 @@ class AuthService:
         user.email = data.email
         user.verified = True
         user.verified_at = datetime.now(timezone.utc)
+        user.phone_verified_at = user.verified_at  # the SMS code just proved it
+        # Bookings a business made for this proven phone / email become theirs (customer_match.py).
+        from app.modules.booking.customer_match import claim_bookings
+        await claim_bookings(self.db, user)
 
         await self.db.delete(auth_token)
         tokens = self._issue_tokens(user)
@@ -279,10 +288,20 @@ class AuthService:
 
 
     async def login(self, data: LoginRequest) -> AuthResponse:
+        if login_locked(data.email):
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "too_many_attempts",
+                    "message": "Too many wrong passwords. Try again in a few minutes, or reset your password.",
+                },
+            )
         user = await self._get_user_by_email(data.email)
 
         if not user or not user.password_hash or not verify_password(data.password, user.password_hash):
+            record_login_failure(data.email)
             raise _invalid_credentials(401, "Invalid email or password")
+        clear_login_failures(data.email)
 
         if not user.verified:
             # Only replace the code if we're allowed to send a new one; otherwise
@@ -367,6 +386,9 @@ class AuthService:
 
         user.verified = True
         user.verified_at = datetime.now(timezone.utc)
+        # Bookings a business made for this proven phone / email become theirs (customer_match.py).
+        from app.modules.booking.customer_match import claim_bookings
+        await claim_bookings(self.db, user)
         await self.db.delete(auth_token)
         tokens = self._issue_tokens(user)
 
@@ -376,16 +398,19 @@ class AuthService:
         return AuthResponse(user=UserResponse.model_validate(user), tokens=tokens)
 
     async def forgot_password(self, data: ForgotPasswordRequest) -> dict:
-        await self._send_otp(data.email, "password_reset")
+        if data.email:
+            await self._send_otp(data.email, "password_reset")
+        else:
+            await self._send_reset_sms(self._reset_phone(data.phone))
         return {"message": "If an account exists, a reset code has been sent."}
 
     async def verify_reset_otp(self, data: VerifyResetOtpRequest) -> dict:
         # Checks without consuming, but a wrong guess still counts as an attempt.
-        await self._check_otp(data.email, data.otp, "password_reset")
+        await self._check_reset_otp(data, data.otp)
         return {"valid": True}
 
     async def reset_password(self, data: ResetPasswordRequest) -> dict:
-        user, auth_token = await self._check_otp(data.email, data.otp, "password_reset")
+        user, auth_token = await self._check_reset_otp(data, data.otp)
 
         user.password_hash = get_password_hash(data.new_password)
         await self.db.delete(auth_token)
@@ -423,10 +448,27 @@ class AuthService:
                         detail={"error": "phone_taken", "message": "Phone number is already in use"},
                     )
             user.phone = data.phone
+            # Not proven by a code: it no longer links bookings to this account (customer_match.py).
+            user.phone_verified_at = None
+
+        if fields & {"first_name", "last_name"}:
+            await self._sync_team_names(user)
 
         await self.db.commit()
         await self.db.refresh(user)
         return user
+
+    async def _sync_team_names(self, user: User) -> None:
+        """A renamed person is renamed everywhere they work: their staff records (calendar columns,
+        bookings, the public profile, earnings) and team roster entries. Names already stored on
+        past bookings, reviews and payouts stay as they were then."""
+        from app.modules.business.models import Staff, TeamInvitation
+
+        name = " ".join(p for p in (user.first_name, user.last_name) if p and p.strip()).strip()
+        if not name:
+            return
+        await self.db.execute(update(Staff).where(Staff.user_id == user.id).values(name=name))
+        await self.db.execute(update(TeamInvitation).where(TeamInvitation.user_id == user.id).values(name=name))
 
     async def change_password(self, user: User, data: ChangePasswordRequest) -> ChangePasswordResponse:
         if not user.password_hash or not verify_password(data.current_password, user.password_hash):
@@ -446,6 +488,16 @@ class AuthService:
         from app.modules.business.models import Business, BusinessPhoto, Staff
         from app.modules.business.tasks import delete_stored_object
 
+        from app.modules.business.models import StaffPortfolioPhoto
+
+        # Their profile picture and portfolio photos go with them.
+        staff_ids = list((await self.db.execute(select(Staff.id).where(Staff.user_id == user.id))).scalars())
+        file_keys = [user.avatar_key] if user.avatar_key else []
+        if staff_ids:
+            file_keys += list((await self.db.execute(
+                select(StaffPortfolioPhoto.storage_key).where(StaffPortfolioPhoto.staff_id.in_(staff_ids))
+            )).scalars())
+            await self.db.execute(delete(StaffPortfolioPhoto).where(StaffPortfolioPhoto.staff_id.in_(staff_ids)))
         # Staff rows reference users without a FK, so clear them explicitly.
         await self.db.execute(delete(Staff).where(Staff.user_id == user.id))
         photo_keys = [
@@ -466,7 +518,7 @@ class AuthService:
         await self.db.delete(user)
         await self.db.commit()
 
-        for key in photo_keys:
+        for key in photo_keys + file_keys:
             await delete_stored_object.enqueue(key=key)
 
     # ─── OTP helpers ──────────────────────────────────────────
@@ -500,6 +552,51 @@ class AuthService:
         await self.db.commit()
 
         await send_otp_email.enqueue(kind=purpose, to=user.email, otp=otp)
+
+    # ─── Account recovery by phone ────────────────────────────
+    # Only a phone proven with a code (phone_verified_at) gets a reset code: a
+    # number someone merely typed into their profile could belong to anyone,
+    # and that person could otherwise take over the account.
+
+    @staticmethod
+    def _reset_phone(raw: str) -> str:
+        try:
+            return normalise_phone(raw, default_country=settings.SMS_DEFAULT_COUNTRY)
+        except InvalidPhoneNumberError:
+            raise HTTPException(status_code=422, detail={"error": "invalid_phone", "message": "Enter a valid phone number"})
+
+    async def _user_by_verified_phone(self, phone: str) -> Optional[User]:
+        return (await self.db.execute(
+            select(User).where(User.phone == phone, User.phone_verified_at.is_not(None))
+        )).scalar_one_or_none()
+
+    async def _send_reset_sms(self, phone: str) -> None:
+        """Like _send_otp, by SMS: rate-limited per number (logged as "phone:<number>" with the
+        email sends) whether or not an account exists, so neither the answer nor a 429 reveals one."""
+        key, purpose = f"phone:{phone}", "password_reset"
+        retry_after = await self._send_retry_after(key, purpose)
+        if retry_after:
+            raise HTTPException(
+                status_code=429,
+                detail={"error": "too_many_requests", "message": "Please wait before requesting another code.",
+                        "retry_after_seconds": retry_after},
+                headers={"Retry-After": str(retry_after)},
+            )
+        self._log_send(key, purpose)
+        user = await self._user_by_verified_phone(phone)
+        if not user:
+            await self.db.commit()
+            return
+        await self._delete_tokens_by_purpose(user.id, purpose)
+        otp = self._generate_otp(user.id, purpose=purpose)
+        await self.db.commit()
+        await send_otp_sms.enqueue(kind=purpose, to=phone, otp=otp)
+
+    async def _check_reset_otp(self, data, otp: str) -> tuple[User, "AuthToken"]:
+        if data.email:
+            return await self._check_otp(data.email, otp, "password_reset")
+        user = await self._user_by_verified_phone(self._reset_phone(data.phone))
+        return await self._check_otp_user(user, otp, "password_reset")
 
     async def _send_allowed(self, email: str, purpose: str) -> bool:
         return await self._send_retry_after(email, purpose) == 0
@@ -649,7 +746,10 @@ class AuthService:
         return hashlib.sha256(token.encode()).hexdigest()
 
     def _issue_tokens(self, user: User) -> TokenResponse:
-        """Mint an access/refresh pair and persist the refresh token (caller commits)."""
+        """Mint an access/refresh pair and persist the refresh token (caller commits).
+        Every sign-in and refresh comes through here, so a disabled account stops here."""
+        if user.disabled_at is not None:
+            raise account_disabled()
         access_token = create_access_token(data={"sub": str(user.id), "email": user.email})
         refresh_token = create_refresh_token(data={"sub": str(user.id)})
         self.db.add(

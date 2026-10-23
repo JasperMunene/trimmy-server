@@ -45,6 +45,9 @@ class Storage(Protocol):
     async def stat(self, key: str) -> Optional[StoredObject]:
         """Size and type of `key`, or None if it doesn't exist."""
 
+    async def read(self, key: str) -> bytes:
+        """The whole object (photos up to MAX_PHOTO_BYTES, to shrink after a direct upload)."""
+
     async def read_head(self, key: str, length: int) -> bytes:
         """The first `length` bytes of `key`."""
 
@@ -86,6 +89,9 @@ class LocalStorage:
         if not path.exists():
             return None
         return StoredObject(size=path.stat().st_size, content_type=None)
+
+    async def read(self, key: str) -> bytes:
+        return await asyncio.to_thread(self._path(key).read_bytes)
 
     async def read_head(self, key: str, length: int) -> bytes:
         def read() -> bytes:
@@ -168,6 +174,10 @@ class R2Storage:
                 return None
             raise
         return StoredObject(size=head["ContentLength"], content_type=head.get("ContentType"))
+
+    async def read(self, key: str) -> bytes:
+        obj = await asyncio.to_thread(self.client.get_object, Bucket=self.bucket, Key=key)
+        return await asyncio.to_thread(obj["Body"].read)
 
     async def read_head(self, key: str, length: int) -> bytes:
         obj = await asyncio.to_thread(

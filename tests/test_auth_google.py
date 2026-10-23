@@ -226,3 +226,30 @@ async def test_bad_id_token_redirects_with_error(client, google_claims, db_sessi
     assert response.status_code == 302
     assert _query(response.headers["location"]) == {"error": error}
     assert (await db_session.execute(select(User))).first() is None
+
+
+# ─── Web apps choosing where to come back to ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_web_app_comes_back_to_its_own_allowed_url(client, google_claims, monkeypatch):
+    monkeypatch.setattr(settings, "GOOGLE_WEB_REDIRECT_ALLOWLIST", ["http://localhost:3000/auth/google"])
+    response = await client.get("/api/v1/auth/google/url",
+                                params={"platform": "web", "redirect_uri": "http://localhost:3000/auth/google"})
+    assert response.status_code == 200
+    params = _query(response.json()["url"])
+    google_claims["nonce"] = params["nonce"]
+    back = await client.get("/api/v1/auth/google/authorized", params={"code": "google-code", "state": params["state"]})
+    assert back.status_code == 302 and back.headers["location"].startswith("http://localhost:3000/auth/google?code=")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("platform,redirect_uri", [
+    ("web", "https://evil.example/auth/google"),        # not on the list
+    ("web", "http://localhost:3000/auth/google/extra"),  # exact matches only
+    ("mobile", "http://localhost:3000/auth/google"),     # web only
+])
+async def test_other_return_urls_are_refused(client, monkeypatch, platform, redirect_uri):
+    monkeypatch.setattr(settings, "GOOGLE_WEB_REDIRECT_ALLOWLIST", ["http://localhost:3000/auth/google"])
+    response = await client.get("/api/v1/auth/google/url", params={"platform": platform, "redirect_uri": redirect_uri})
+    assert response.status_code == 400 and response.json()["error"] == "invalid_redirect"

@@ -175,6 +175,9 @@ class FakeR2:
     async def read_head(self, key, length):
         return self.objects[key][:length]
 
+    async def read(self, key):
+        return self.objects[key]
+
 
 @pytest.fixture
 def r2(monkeypatch):
@@ -574,8 +577,28 @@ def test_business_routes_document_response_models():
             continue
         for method, op in ops.items():
             for status, resp in op["responses"].items():
+                if "text/event-stream" in resp.get("content", {}):
+                    continue  # a live stream (GET /me/events), not a JSON body
                 if status.startswith("2") and status != "204":
                     schema = resp.get("content", {}).get("application/json", {}).get("schema", {})
                     if "$ref" not in schema:
                         missing.append(f"{method.upper()} {path} {status}")
     assert missing == []
+
+
+@pytest.mark.asyncio
+async def test_amenities_persist_on_update_and_come_back(client, auth_headers):
+    base = {"name": "Glow", "categories": ["hair_salon"], "phone": "+254700661122",
+            "location": {"address": "Kilimani", "lat": -1.29, "lng": 36.78}}
+    created = await client.post("/api/v1/businesses", json={**base, "amenities": ["wifi"]}, headers=auth_headers)
+    assert created.json()["amenities"] == ["wifi"]
+    biz_id = created.json()["businessId"]
+
+    updated = await client.patch(f"/api/v1/businesses/{biz_id}", json={**base, "amenities": ["wifi", "parking"]}, headers=auth_headers)
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["amenities"] == ["wifi", "parking"]
+    kept = await client.patch(f"/api/v1/businesses/{biz_id}", json={**base, "name": "Glow 2"}, headers=auth_headers)
+    assert kept.json()["amenities"] == ["wifi", "parking"]  # left out = unchanged
+    cleared = await client.patch(f"/api/v1/businesses/{biz_id}", json={**base, "amenities": []}, headers=auth_headers)
+    assert cleared.json()["amenities"] == []
+    assert (await client.get(f"/api/v1/businesses/{biz_id}", headers=auth_headers)).json()["amenities"] == []

@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import Literal, Optional, List
-from datetime import datetime
+from datetime import date, datetime
 import uuid as uuid_pkg
 
 
@@ -51,6 +51,7 @@ class CreateBusinessResponse(BaseModel):
     categories: List[str]
     phone: str
     location: LocationResponse
+    amenities: List[str] = []
     status: str
     onboarding_step: Optional[str] = Field(None, alias="onboardingStep")
     created_at: datetime = Field(alias="createdAt")
@@ -64,6 +65,7 @@ class UpdateBusinessResponse(BaseModel):
     categories: List[str]
     phone: str
     location: LocationResponse
+    amenities: List[str] = []
 
     model_config = {"from_attributes": True, "populate_by_name": True}
 
@@ -84,6 +86,7 @@ class GetBusinessResponse(BaseModel):
     policies: Optional["PoliciesResponse"] = None
     payment_destination: Optional["PaymentDestinationResponse"] = Field(None, alias="paymentDestination")
     team_mode: Optional[str] = Field(None, alias="teamMode")
+    booking_settings: Optional["BookingSettingsResponse"] = Field(None, alias="bookingSettings")
     status: str
     onboarding_step: Optional[str] = Field(None, alias="onboardingStep")
 
@@ -310,12 +313,18 @@ class TeamModeResponse(BaseModel):
 class InviteTeamMemberRequest(BaseModel):
     email: Optional[str] = None
     phone: Optional[str] = None
+    # staff = takes appointments; front_desk = runs the desk only (no services, no commission).
     role: str = Field(..., pattern=r"^(front_desk|staff)$")
+    # Staff who also run the front desk (switch between the two in the app). Always on for front_desk.
+    front_desk_access: bool = Field(False, alias="frontDeskAccess")
+
+    model_config = {"populate_by_name": True}
 
 
 class AddTeamMemberRequest(InviteTeamMemberRequest):
     name: str = Field(..., min_length=1, max_length=100)
-    commission_percent: int = Field(40, alias="commissionPercent", ge=0, le=100)
+    # Staff only (defaults to 40); front desk earns no commission, so it must be left out.
+    commission_percent: Optional[int] = Field(None, alias="commissionPercent", ge=0, le=100)
     # null = works whenever the business is open.
     working_days: Optional[List[Weekday]] = Field(None, alias="workingDays")
 
@@ -323,10 +332,14 @@ class AddTeamMemberRequest(InviteTeamMemberRequest):
 
 
 class UpdateTeamMemberRequest(BaseModel):
-    """Only the fields sent are changed; send workingDays: null to clear it."""
+    """Only the fields sent are changed; send workingDays: null to clear it.
+    takesAppointments / frontDeskAccess set what they do: both = staff who also run the desk;
+    desk only = front_desk (commission cleared); at least one must stay on."""
 
     commission_percent: Optional[int] = Field(None, alias="commissionPercent", ge=0, le=100)
     working_days: Optional[List[Weekday]] = Field(None, alias="workingDays")
+    takes_appointments: Optional[bool] = Field(None, alias="takesAppointments")
+    front_desk_access: Optional[bool] = Field(None, alias="frontDeskAccess")
 
     model_config = {"populate_by_name": True}
 
@@ -336,12 +349,18 @@ class TeamMemberResponse(BaseModel):
 
     invitation_id: uuid_pkg.UUID = Field(alias="invitationId")
     business_id: uuid_pkg.UUID = Field(alias="businessId")
+    # The bookable identity (profile staff[].staffId, bookings). Null until the invite is accepted.
+    staff_id: Optional[uuid_pkg.UUID] = Field(None, alias="staffId")
     name: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
     role: str
     status: str
-    commission_percent: int = Field(alias="commissionPercent")
+    # Null for desk-only members: they perform no services.
+    commission_percent: Optional[int] = Field(None, alias="commissionPercent")
+    front_desk_access: bool = Field(False, alias="frontDeskAccess")
+    # Their profile picture once they've joined (null: initials).
+    avatar_url: Optional[str] = Field(None, alias="avatarUrl")
     working_days: Optional[List[str]] = Field(None, alias="workingDays")
     sent_at: datetime = Field(alias="sentAt")
 
@@ -375,7 +394,17 @@ class MyBusinessResponse(BaseModel):
     business_id: uuid_pkg.UUID = Field(alias="businessId")
     name: str
     status: str
-    role: str
+    role: str  # owner | front_desk | staff
+    # The caller's own Staff record there: bookings, earnings and payouts are keyed by it.
+    # Null for an owner who doesn't take appointments themselves (team mode).
+    staff_id: Optional[uuid_pkg.UUID] = Field(None, alias="staffId")
+    # Staff with front desk access can switch between their schedule and the desk.
+    front_desk_access: bool = Field(False, alias="frontDeskAccess")
+    # The app modes open to them here: "staff" (my schedule) and/or "front_desk". Empty for owners.
+    modes: List[str] = []
+    # Suspended by Trimmy's team: customers can't find or book it (the apps show the owner why).
+    suspended_at: Optional[datetime] = Field(None, alias="suspendedAt")
+    suspended_reason: Optional[str] = Field(None, alias="suspendedReason")
 
     model_config = {"populate_by_name": True}
 
@@ -433,6 +462,7 @@ class BusinessSummaryResponse(BaseModel):
 
 class SearchResponse(BaseModel):
     businesses: List[BusinessSummaryResponse]
+    total: Optional[int] = None  # matches before limit/offset
 
 
 # ─── Discovery: Profile ──────────────────────────────────────
@@ -451,6 +481,11 @@ class StaffMemberResponse(BaseModel):
     staff_id: uuid_pkg.UUID = Field(alias="staffId")
     name: str
     role: str
+    # Null = works whenever the business is open.
+    working_days: Optional[List[str]] = Field(None, alias="workingDays")
+    # allServices true = performs every service; otherwise only serviceIds (possibly none).
+    all_services: bool = Field(True, alias="allServices")
+    service_ids: List[uuid_pkg.UUID] = Field([], alias="serviceIds")
     rating: float
     avatar_url: Optional[str] = Field(None, alias="avatarUrl")
     bio: Optional[str] = None
@@ -460,14 +495,47 @@ class StaffMemberResponse(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class ReviewReplyResponse(BaseModel):
+    text: str
+    replied_at: datetime = Field(alias="repliedAt")
+
+    model_config = {"populate_by_name": True}
+
+
 class ReviewResponse(BaseModel):
+    """A review with who wrote it, who did the service, what was done and when, and the
+    business's reply. Older reviews (before bookings were linked) lack staff and services."""
+
     review_id: uuid_pkg.UUID = Field(alias="reviewId")
     author_name: str = Field(alias="authorName")
+    author_avatar_url: Optional[str] = Field(None, alias="authorAvatarUrl")
     rating: int
     text: Optional[str] = None
     created_at: datetime = Field(alias="createdAt")
+    business_id: Optional[uuid_pkg.UUID] = Field(None, alias="businessId")
+    business_name: Optional[str] = Field(None, alias="businessName")
+    booking_id: Optional[uuid_pkg.UUID] = Field(None, alias="bookingId")
+    staff_id: Optional[uuid_pkg.UUID] = Field(None, alias="staffId")
+    staff_name: Optional[str] = Field(None, alias="staffName")
+    staff_avatar_url: Optional[str] = Field(None, alias="staffAvatarUrl")
+    services: List[str] = []
+    visit_date: Optional[date] = Field(None, alias="visitDate")
+    reply: Optional[ReviewReplyResponse] = None
 
     model_config = {"populate_by_name": True}
+
+
+class ListReviewsResponse(BaseModel):
+    reviews: List[ReviewResponse]
+    total: int
+    # The average over every review matching the filter (all of them, not just this page).
+    average_rating: float = Field(0.0, alias="averageRating")
+
+    model_config = {"populate_by_name": True}
+
+
+class ReviewReplyRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=1000)
 
 
 class DepositRuleResponse(BaseModel):
@@ -527,6 +595,35 @@ class BusinessProfileResponse(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+# ─── Booking settings ────────────────────────────────────────
+
+class UpdateBookingSettingsRequest(BaseModel):
+    """Only the fields sent are changed."""
+
+    timezone: Optional[str] = Field(None, examples=["Africa/Nairobi"])
+    # Customers see start times on this grid. Must divide an hour evenly.
+    slot_interval_minutes: Optional[int] = Field(None, alias="slotIntervalMinutes", ge=5, le=60)
+    # Kept free after each booking (clean-up, turnover).
+    buffer_minutes: Optional[int] = Field(None, alias="bufferMinutes", ge=0, le=120)
+    # How soon from now the earliest bookable slot is.
+    min_lead_minutes: Optional[int] = Field(None, alias="minLeadMinutes", ge=0, le=7 * 24 * 60)
+    # How far ahead customers can book.
+    max_days_ahead: Optional[int] = Field(None, alias="maxDaysAhead", ge=1, le=365)
+
+    model_config = {"populate_by_name": True}
+
+
+class BookingSettingsResponse(BaseModel):
+    business_id: uuid_pkg.UUID = Field(alias="businessId")
+    timezone: str
+    slot_interval_minutes: int = Field(alias="slotIntervalMinutes")
+    buffer_minutes: int = Field(alias="bufferMinutes")
+    min_lead_minutes: int = Field(alias="minLeadMinutes")
+    max_days_ahead: int = Field(alias="maxDaysAhead")
+
+    model_config = {"populate_by_name": True}
+
+
 GetBusinessResponse.model_rebuild()
 PoliciesResponse.model_rebuild()
 
@@ -547,6 +644,28 @@ class PhotoUploadUrlResponse(BaseModel):
     headers: dict[str, str]
     key: str
     expires_in: int = Field(alias="expiresIn")
+
+    model_config = {"populate_by_name": True}
+
+
+class CompletePortfolioUploadRequest(BaseModel):
+    key: str = Field(..., min_length=1, max_length=300)
+
+
+class PortfolioPhotoResponse(BaseModel):
+    photo_id: uuid_pkg.UUID = Field(alias="photoId")
+    staff_id: uuid_pkg.UUID = Field(alias="staffId")
+    url: str
+    created_at: datetime = Field(alias="createdAt")
+
+    model_config = {"populate_by_name": True}
+
+
+class PortfolioResponse(BaseModel):
+    staff_id: uuid_pkg.UUID = Field(alias="staffId")
+    # Newest first.
+    photos: List[PortfolioPhotoResponse]
+    max_photos: int = Field(alias="maxPhotos")
 
     model_config = {"populate_by_name": True}
 
@@ -583,3 +702,43 @@ class BankOption(BaseModel):
 class PaymentDestinationOptionsResponse(BaseModel):
     types: List[PaymentTypeOption]
     banks: List[BankOption]
+
+
+# ─── Staff services ──────────────────────────────────────────
+
+class SetStaffServicesRequest(BaseModel):
+    """allServices: true (and no serviceIds) = performs every service, including ones added later.
+    allServices: false = performs exactly serviceIds, which may be empty (e.g. front desk)."""
+
+    all_services: bool = Field(alias="allServices")
+    service_ids: List[uuid_pkg.UUID] = Field([], alias="serviceIds")
+
+    model_config = {"populate_by_name": True}
+
+
+class StaffServicesResponse(BaseModel):
+    staff_id: uuid_pkg.UUID = Field(alias="staffId")
+    all_services: bool = Field(alias="allServices")
+    service_ids: List[uuid_pkg.UUID] = Field(alias="serviceIds")
+
+    model_config = {"populate_by_name": True}
+
+
+class MyStaffServiceItem(BaseModel):
+    service_id: uuid_pkg.UUID = Field(alias="serviceId")
+    name: str
+    duration_minutes: int = Field(alias="durationMinutes")
+    price: MoneyResponse
+
+    model_config = {"populate_by_name": True}
+
+
+class MyStaffServicesResponse(BaseModel):
+    """The caller's own services at a business (team.json#get-my-staff-services)."""
+
+    staff_id: uuid_pkg.UUID = Field(alias="staffId")
+    all_services: bool = Field(alias="allServices")
+    # With allServices, every service the business offers; otherwise the assigned ones.
+    services: List[MyStaffServiceItem]
+
+    model_config = {"populate_by_name": True}

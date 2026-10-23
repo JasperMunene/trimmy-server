@@ -23,14 +23,31 @@ class User(Base):
     first_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     last_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     phone: Mapped[Optional[str]] = mapped_column(Text, unique=True, nullable=True, index=True)
+    # When the phone was proven with a code (phone signup). Cleared if it's changed without one.
+    phone_verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     # Google's stable account id ("sub"); set once the user has signed in with Google.
     google_sub: Mapped[Optional[str]] = mapped_column(Text, unique=True, nullable=True, index=True)
+    # Profile picture: a small square JPEG in storage (app/core/images.py), or null for initials.
+    avatar_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    avatar_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # The picture on their Google account (from the last Google sign-in), offered as "use my Google photo".
+    google_picture_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     verified: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     auth_type: Mapped[AuthType] = mapped_column(String(20), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
     )
     verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Trimmy's own team: 'admin' opens the admin app (app/modules/admin). Null for everyone else.
+    platform_role: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
+    # Admin 2-step sign-in: the authenticator app's secret (encrypted, app/core/totp.py), when it
+    # was set up, and the last time step used (a code works once).
+    totp_secret: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    totp_enabled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    totp_last_step: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Disabled by Trimmy's team: no sign-in, no API access, every session ended.
+    disabled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    disabled_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     auth_tokens: Mapped[list["AuthToken"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"

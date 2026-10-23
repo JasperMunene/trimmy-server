@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, computed_field, model_validator
 from typing import Optional
 from datetime import datetime
 import uuid as uuid_pkg
@@ -62,6 +62,15 @@ class UserResponse(BaseModel):
     auth_type: str
     verified: bool
     created_at: datetime
+    # Their profile picture (a small square JPEG), or null: show initials.
+    avatar_url: Optional[str] = None
+    google_picture_url: Optional[str] = Field(None, exclude=True)
+
+    @computed_field
+    @property
+    def has_google_picture(self) -> bool:
+        """Their Google account has a picture they can use (POST /auth/me/avatar/google)."""
+        return bool(self.google_picture_url)
 
     model_config = {"from_attributes": True}
 
@@ -71,8 +80,21 @@ class AuthResponse(BaseModel):
     tokens: TokenResponse
 
 
-class ForgotPasswordRequest(BaseModel):
-    email: EmailStr
+class _EmailOrPhone(BaseModel):
+    """Account recovery works with either: the email, or a phone verified with a code."""
+
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = Field(None, max_length=32)
+
+    @model_validator(mode="after")
+    def _one_of(self):
+        if bool(self.email) == bool(self.phone):
+            raise ValueError("Send either email or phone")
+        return self
+
+
+class ForgotPasswordRequest(_EmailOrPhone):
+    pass
 
 
 class VerifyEmailRequest(BaseModel):
@@ -80,14 +102,12 @@ class VerifyEmailRequest(BaseModel):
     otp: str = Field(..., min_length=6, max_length=6)
 
 
-class ResetPasswordRequest(BaseModel):
-    email: EmailStr
+class ResetPasswordRequest(_EmailOrPhone):
     otp: str = Field(..., min_length=6, max_length=6)
     new_password: str = Field(..., min_length=8, max_length=128)
 
 
-class VerifyResetOtpRequest(BaseModel):
-    email: EmailStr
+class VerifyResetOtpRequest(_EmailOrPhone):
     otp: str = Field(..., min_length=6, max_length=6)
 
 

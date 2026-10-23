@@ -13,19 +13,36 @@ x-app-env: &app-env
   GOOGLE_AUTH_CLIENT_SECRET: ${GOOGLE_AUTH_CLIENT_SECRET:-}
   GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-}
   GOOGLE_WEB_REDIRECT_URL: ${GOOGLE_WEB_REDIRECT_URL:-}
+  # JSON list of exact web return URLs allowed for Google sign-in, e.g. ["https://app.trimmy.com/auth/google"]
+  GOOGLE_WEB_REDIRECT_ALLOWLIST: ${GOOGLE_WEB_REDIRECT_ALLOWLIST:-[]}
   GOOGLE_MOBILE_REDIRECT_URL: ${GOOGLE_MOBILE_REDIRECT_URL:-trimmy://auth/google}
   R2_ENDPOINT: ${R2_ENDPOINT:-}
   R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
   R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
   R2_BUCKET: ${R2_BUCKET:-}
   R2_PUBLIC_URL: ${R2_PUBLIC_URL:-}
+  MPESA_ENV: ${MPESA_ENV:-sandbox}
+  MPESA_CONSUMER_KEY: ${MPESA_CONSUMER_KEY:-}
+  MPESA_CONSUMER_SECRET: ${MPESA_CONSUMER_SECRET:-}
+  MPESA_SHORTCODE: ${MPESA_SHORTCODE:-}
+  MPESA_PASSKEY: ${MPESA_PASSKEY:-}
+  MPESA_CALLBACK_URL: ${MPESA_CALLBACK_URL:-}
+  MPESA_CALLBACK_SECRET: ${MPESA_CALLBACK_SECRET:-}
+  EXPO_ACCESS_TOKEN: ${EXPO_ACCESS_TOKEN:-}
+  # Push stays off until EAS/APNs/FCM are set up; tokens are collected meanwhile.
+  NOTIFY_PUSH_ENABLED: ${NOTIFY_PUSH_ENABLED:-false}
+  # nginx on the host reaches the app through Docker's bridge gateway (172.16.0.0/12): trust its
+  # X-Forwarded-For so rate limits see each client's real IP. Direct traffic keeps its own IP.
+  FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-172.16.0.0/12,127.0.0.1}
 
 services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # Capped, and only keys with a TTL (the read cache) can be evicted when full.
+    command: redis-server --maxmemory 128mb --maxmemory-policy volatile-lru
     ports:
-      - "6383:6379"
+      - "127.0.0.1:26383:6379" # this host only (no password); the app reaches it as redis:6379
     volumes:
       - redis_data:/data
     healthcheck:
@@ -38,8 +55,9 @@ services:
     image: rabbitmq:3.13-management-alpine
     restart: unless-stopped
     ports:
-      - "5674:5672"
-      - "15674:15672"
+      # Host ports are for debugging from the server (or an SSH tunnel) only; the app uses rabbitmq:5672.
+      - "127.0.0.1:25674:5672"
+      - "127.0.0.1:25684:15672"
     environment:
       RABBITMQ_DEFAULT_USER: timmy
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-timmy_prod_password}
@@ -90,6 +108,19 @@ services:
       - pg-net
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+  beat:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment: *app-env
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    # Enqueues periodic tasks (e.g. releasing expired booking holds) for the
+    # workers to run. Exactly one replica: don't scale this service.
+    command: python worker.py --beat
 
 volumes:
   redis_data:
