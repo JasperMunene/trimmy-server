@@ -64,6 +64,10 @@ class Business(Base):
     onboarding_step: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     team_mode: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Suspended by Trimmy's team (trust & safety): hidden from customers, no new online bookings;
+    # the owner's own calendar, walk-ins and checkout keep working. Status stays as it was.
+    suspended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    suspended_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Booking settings (docs/booking/PLAN.md, D5 and D8). Working hours are in this timezone.
     timezone: Mapped[str] = mapped_column(Text, nullable=False, default="Africa/Nairobi")
@@ -219,6 +223,9 @@ class PaymentDestination(Base):
     bank_shortcode: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     bank_account_number: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     verification_status: Mapped[str] = mapped_column(String(20), default=VerificationStatus.PENDING)
+    # When someone on Trimmy's team checked these details (null: not yet, or changed since).
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_by: Mapped[Optional[uuid_pkg.UUID]] = mapped_column(UUID, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -352,5 +359,8 @@ class Review(Base):
     reply_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     replied_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     replied_by: Mapped[Optional[uuid_pkg.UUID]] = mapped_column(UUID, nullable=True)
+    # Hidden by Trimmy's team (e.g. fake or abusive): left out of profiles, lists and ratings.
+    hidden_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    hidden_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     business: Mapped["Business"] = relationship(back_populates="reviews")

@@ -1,14 +1,34 @@
 """Visits: adding a service (maybe with someone else) to a customer's appointment, grouped so the
 visit is checked out together."""
 import uuid
+from datetime import datetime
 
 import pytest
 
+import app.modules.booking.business_bookings as business_bookings
+import app.modules.booking.service as booking_service
 import app.modules.booking.tasks as booking_tasks
+import app.modules.booking.visits as visits
 from app.modules.business.models import Staff
 from tests.test_business_bookings import owner_body
-from tests.test_create_booking import customer, day, salon  # noqa: F401  (fixtures)
+from tests.test_create_booking import NBO, customer, day, salon  # noqa: F401  (fixtures)
 from tests.test_read_bookings import headers_for, make_user
+
+
+class _Morning(datetime):
+    """Today at 10:00 in Nairobi: walk-ins start "now", and later in the day a service added after
+    one would run past the test salon's 17:00 close."""
+
+    @classmethod
+    def now(cls, tz=None):
+        at = datetime.now(NBO).replace(hour=10, minute=0, second=0, microsecond=0)
+        return at.astimezone(tz) if tz else at.replace(tzinfo=None)
+
+
+@pytest.fixture(autouse=True)
+def morning(monkeypatch):
+    for module in (business_bookings, visits, booking_service):
+        monkeypatch.setattr(module, "datetime", _Morning)
 
 
 async def _walk_in(client, headers, salon, staff="a", **extra):

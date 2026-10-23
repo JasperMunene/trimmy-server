@@ -402,6 +402,9 @@ class MyBusinessResponse(BaseModel):
     front_desk_access: bool = Field(False, alias="frontDeskAccess")
     # The app modes open to them here: "staff" (my schedule) and/or "front_desk". Empty for owners.
     modes: List[str] = []
+    # Suspended by Trimmy's team: customers can't find or book it (the apps show the owner why).
+    suspended_at: Optional[datetime] = Field(None, alias="suspendedAt")
+    suspended_reason: Optional[str] = Field(None, alias="suspendedReason")
 
     model_config = {"populate_by_name": True}
 

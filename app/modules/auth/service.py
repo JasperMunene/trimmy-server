@@ -13,6 +13,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.dependencies import account_disabled
 from app.core.rate_limit import clear_login_failures, login_locked, record_login_failure
 from app.core.security import (
     create_access_token,
@@ -745,7 +746,10 @@ class AuthService:
         return hashlib.sha256(token.encode()).hexdigest()
 
     def _issue_tokens(self, user: User) -> TokenResponse:
-        """Mint an access/refresh pair and persist the refresh token (caller commits)."""
+        """Mint an access/refresh pair and persist the refresh token (caller commits).
+        Every sign-in and refresh comes through here, so a disabled account stops here."""
+        if user.disabled_at is not None:
+            raise account_disabled()
         access_token = create_access_token(data={"sub": str(user.id), "email": user.email})
         refresh_token = create_refresh_token(data={"sub": str(user.id)})
         self.db.add(

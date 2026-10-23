@@ -38,6 +38,16 @@ class User(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
     )
     verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Trimmy's own team: 'admin' opens the admin app (app/modules/admin). Null for everyone else.
+    platform_role: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
+    # Admin 2-step sign-in: the authenticator app's secret (encrypted, app/core/totp.py), when it
+    # was set up, and the last time step used (a code works once).
+    totp_secret: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    totp_enabled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    totp_last_step: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Disabled by Trimmy's team: no sign-in, no API access, every session ended.
+    disabled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    disabled_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     auth_tokens: Mapped[list["AuthToken"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"

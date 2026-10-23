@@ -10,6 +10,7 @@ from app.modules.booking.models import Booking
 from app.modules.business.models import Staff
 from app.modules.payments.models import Payment, PaymentAllocation
 from app.modules.payouts.models import WalletAdjustment
+from tests.test_visits import morning  # noqa: F401  (autouse: a 10:00 clock)
 from tests.test_business_bookings import owner_body
 from tests.test_charge import charge, checkout_id, till  # noqa: F401  (fixtures)
 from tests.test_create_booking import customer, salon  # noqa: F401  (fixtures)

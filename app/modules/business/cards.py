@@ -20,7 +20,7 @@ async def load_cards(db: AsyncSession) -> list[dict]:
     """Every published business, as card dicts."""
     rows = (await db.execute(
         select(Business.id, Business.name, Business.categories, Business.location, Business.published_at)
-        .where(Business.status == BusinessStatus.PUBLISHED)
+        .where(Business.status == BusinessStatus.PUBLISHED, Business.suspended_at.is_(None))
     )).all()
     if not rows:
         return []
@@ -45,7 +45,7 @@ async def load_cards(db: AsyncSession) -> list[dict]:
         bid: (count, float(avg or 0))
         for bid, count, avg in (await db.execute(
             select(Review.business_id, func.count(Review.id), func.avg(Review.rating))
-            .where(Review.business_id.in_(ids))
+            .where(Review.business_id.in_(ids), Review.hidden_at.is_(None))
             .group_by(Review.business_id)
         )).all()
     }

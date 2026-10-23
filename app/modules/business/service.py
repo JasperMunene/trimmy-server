@@ -1072,6 +1072,8 @@ class BusinessService:
         # check (e.g. an M-Pesa account-name lookup) would start at PENDING and
         # be completed by a worker task.
         pd.verification_status = VerificationStatus.VERIFIED
+        # New details: Trimmy's team checks them again (admin → Payment details).
+        pd.reviewed_at = pd.reviewed_by = None
 
         business.onboarding_step = OnboardingStep.PAYMENT_DESTINATION
         await self.db.commit()
@@ -1592,6 +1594,7 @@ class BusinessService:
             MyBusinessResponse(
                 businessId=b.id, name=b.name, status=b.status, role="owner",
                 staffId=my_staff[b.id].id if b.id in my_staff else None,
+                suspendedAt=b.suspended_at, suspendedReason=b.suspended_reason,
             )
             for b in owned_businesses
         ]
@@ -1604,7 +1607,7 @@ class BusinessService:
             modes = (["staff"] if staff.role != "front_desk" else []) + (["front_desk"] if desk else [])
             items.append(MyBusinessResponse(
                 businessId=business.id, name=business.name, status=business.status, role=staff.role, staffId=staff.id,
-                frontDeskAccess=desk, modes=modes,
+                frontDeskAccess=desk, modes=modes, suspendedAt=business.suspended_at,
             ))
         return ListMyBusinessesResponse(businesses=items)
 
@@ -1751,7 +1754,7 @@ class BusinessService:
 
         result = await self.db.execute(
             select(Business)
-            .where(Business.id == bid, Business.status == BusinessStatus.PUBLISHED)
+            .where(Business.id == bid, Business.status == BusinessStatus.PUBLISHED, Business.suspended_at.is_(None))
             .options(
                 selectinload(Business.photos),
                 selectinload(Business.working_hours),
@@ -1767,10 +1770,10 @@ class BusinessService:
         # Counted by the database, and only the latest few loaded: a popular business can have
         # thousands of reviews ("See all" pages through GET /businesses/{id}/reviews).
         review_count, review_avg = (await self.db.execute(
-            select(func.count(Review.id), func.avg(Review.rating)).where(Review.business_id == business.id)
+            select(func.count(Review.id), func.avg(Review.rating)).where(Review.business_id == business.id, Review.hidden_at.is_(None))
         )).one()
         latest_reviews = (await self.db.execute(
-            select(Review).where(Review.business_id == business.id)
+            select(Review).where(Review.business_id == business.id, Review.hidden_at.is_(None))
             .order_by(Review.created_at.desc()).limit(PROFILE_REVIEWS)
         )).scalars().all()
 
