@@ -40,7 +40,7 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     ports:
-      - "127.0.0.1:6383:6379" # this host only: Redis has no password
+      - "127.0.0.1:26383:6379" # this host only (no password); the app reaches it as redis:6379
     volumes:
       - redis_data:/data
     healthcheck:
@@ -53,8 +53,9 @@ services:
     image: rabbitmq:3.13-management-alpine
     restart: unless-stopped
     ports:
-      - "5674:5672"
-      - "15674:15672"
+      # Host ports are for debugging from the server (or an SSH tunnel) only; the app uses rabbitmq:5672.
+      - "127.0.0.1:25674:5672"
+      - "127.0.0.1:25684:15672"
     environment:
       RABBITMQ_DEFAULT_USER: timmy
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-timmy_prod_password}
