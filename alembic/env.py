@@ -21,6 +21,8 @@ import app.modules.payouts.models  # noqa: F401
 import app.modules.notifications.models  # noqa: F401
 import app.modules.daysummary.models  # noqa: F401
 import app.modules.favorites.models  # noqa: F401
+import app.modules.support.models  # noqa: F401
+import app.core.audit  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
