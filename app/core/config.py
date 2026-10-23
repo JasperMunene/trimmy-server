@@ -128,6 +128,13 @@ class Settings(BaseSettings):
     # Redis down: each process counts on its own until it's back.
     RATE_LIMIT_STORAGE: str = ""
 
+    # Admin app (app/modules/admin): short sessions, 2-step sign-in.
+    ADMIN_ACCESS_TOKEN_MINUTES: int = 15
+    ADMIN_SESSION_HOURS: int = 12
+    # Encrypts admins' authenticator secrets. Empty: derived from SECRET_KEY (set it to rotate
+    # SECRET_KEY without making every admin set up their authenticator again).
+    TOTP_ENCRYPTION_KEY: str = ""
+
     OTP_MAX_ATTEMPTS: int = 5
     OTP_RESEND_COOLDOWN_SECONDS: int = 60
     OTP_MAX_SENDS_PER_HOUR: int = 5
