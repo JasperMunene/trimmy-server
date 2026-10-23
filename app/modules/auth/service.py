@@ -439,9 +439,24 @@ class AuthService:
             # Not proven by a code: it no longer links bookings to this account (customer_match.py).
             user.phone_verified_at = None
 
+        if fields & {"first_name", "last_name"}:
+            await self._sync_team_names(user)
+
         await self.db.commit()
         await self.db.refresh(user)
         return user
+
+    async def _sync_team_names(self, user: User) -> None:
+        """A renamed person is renamed everywhere they work: their staff records (calendar columns,
+        bookings, the public profile, earnings) and team roster entries. Names already stored on
+        past bookings, reviews and payouts stay as they were then."""
+        from app.modules.business.models import Staff, TeamInvitation
+
+        name = " ".join(p for p in (user.first_name, user.last_name) if p and p.strip()).strip()
+        if not name:
+            return
+        await self.db.execute(update(Staff).where(Staff.user_id == user.id).values(name=name))
+        await self.db.execute(update(TeamInvitation).where(TeamInvitation.user_id == user.id).values(name=name))
 
     async def change_password(self, user: User, data: ChangePasswordRequest) -> ChangePasswordResponse:
         if not user.password_hash or not verify_password(data.current_password, user.password_hash):
