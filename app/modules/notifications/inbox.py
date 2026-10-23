@@ -138,6 +138,22 @@ async def mark_read(notification_id: str, current_user: User = Depends(get_curre
     return UnreadCountResponse(unreadCount=await _unread_count(db, current_user.id))
 
 
+@inbox_router.delete("/{notification_id}", response_model=UnreadCountResponse)
+async def delete_notification(notification_id: str, current_user: User = Depends(get_current_user),
+                              db: AsyncSession = Depends(get_db)):
+    """Clear one from the inbox (the app's swipe to delete). Someone else's, or one already gone, is 404."""
+    try:
+        nid = uuid_pkg.UUID(notification_id)
+    except ValueError:
+        raise _error(404, "not_found", "Notification not found")
+    n = await db.get(Notification, nid)
+    if n is None or n.user_id != current_user.id:
+        raise _error(404, "not_found", "Notification not found")
+    await db.delete(n)
+    await db.commit()
+    return UnreadCountResponse(unreadCount=await _unread_count(db, current_user.id))
+
+
 @inbox_router.post("/test", response_model=NotificationItem)
 @limiter.limit("5/minute")
 async def send_test_notification(request: Request, current_user: User = Depends(get_current_user),
