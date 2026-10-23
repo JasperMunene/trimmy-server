@@ -34,6 +34,7 @@ for _name in EXTERNAL_SEND_SETTINGS:
 # The live stream runs in-process in tests (no Redis needed).
 os.environ["REALTIME_BACKEND"] = "local"
 os.environ["RATE_LIMIT_STORAGE"] = "memory://"
+os.environ["CACHE_BACKEND"] = "local"
 
 from app.core.base import Base
 from app.core.database import get_db
@@ -81,6 +82,13 @@ def event_loop():
 @pytest.fixture(autouse=True)
 def reset_rate_limits():
     limiter.reset()
+
+
+@pytest.fixture(autouse=True)
+def reset_cache():
+    from app.core import cache
+
+    cache.clear_local()
 
 
 @pytest_asyncio.fixture(autouse=True)

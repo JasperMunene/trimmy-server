@@ -11,6 +11,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from slowapi.errors import RateLimitExceeded
 
 from app.core.config import settings
+from app.core import cache_invalidation  # noqa: F401  (clears cached discovery data on commit)
 from app.core.rate_limit import limiter
 from app.core.storage import LocalStorage, get_storage
 from app.workers.broker import publisher

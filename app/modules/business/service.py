@@ -38,7 +38,6 @@ from app.modules.business.schemas import (
     AddTeamMemberRequest,
     BookingSettingsResponse,
     BusinessProfileResponse,
-    BusinessSummaryResponse,
     CancellationPolicyResponse,
     CompletePhotoUploadRequest,
     CompletePortfolioUploadRequest,
@@ -247,33 +246,6 @@ def invitations_for(user: User):
     if invite_phone(user.phone):
         matches.append(TeamInvitation.phone.in_({user.phone, invite_phone(user.phone)}))
     return or_(*matches) if matches else None
-
-
-def business_summary(biz: Business, distance_km: float = 0.0) -> BusinessSummaryResponse:
-    """The search-result card. Needs photos, service_categories.services and reviews loaded."""
-    services = [s for cat in (biz.service_categories or []) for s in (cat.services or [])]
-    reviews = list(biz.reviews or [])
-    loc = biz.location or {}
-    photo_urls = [p.url for p in sorted(biz.photos or [], key=lambda p: (not p.is_cover, p.created_at))]
-    if services:
-        cheapest = min(services, key=lambda s: s.price_amount)
-        starting_price = MoneyResponse(amount=cheapest.price_amount, currency=cheapest.price_currency)
-    else:
-        starting_price = MoneyResponse(amount=0, currency="KES")
-    return BusinessSummaryResponse(
-        businessId=biz.id,
-        name=biz.name,
-        categories=biz.categories or [],
-        thumbnailUrl=photo_urls[0] if photo_urls else "",
-        photos=photo_urls,
-        address=loc.get("address", ""),
-        lat=loc.get("lat", 0.0),
-        lng=loc.get("lng", 0.0),
-        distanceKm=distance_km,
-        startingPrice=starting_price,
-        rating=round(sum(r.rating for r in reviews) / len(reviews), 1) if reviews else 0.0,
-        reviewCount=len(reviews),
-    )
 
 
 # Reviews included on a business profile; the rest are paged (GET /businesses/{id}/reviews).
@@ -1731,58 +1703,39 @@ class BusinessService:
         price_max: Optional[int] = None,
         rating_min: Optional[float] = None,
         radius_km: Optional[float] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
     ) -> SearchResponse:
-        result = await self.db.execute(
-            select(Business)
-            .where(Business.status == BusinessStatus.PUBLISHED)
-            .options(
-                selectinload(Business.photos),
-                selectinload(Business.service_categories).selectinload(ServiceCategory.services),
-                selectinload(Business.reviews),
-            )
-        )
-        businesses = result.scalars().all()
+        """Filters and sorts the light card list (business_cards) in Python: one small dict per
+        published business, so this stays cheap per request whatever the location or filters.
+        Nearest first with a location, else newest. limit/offset page the result; total counts it."""
+        from app.modules.business.cards import card_summary, cached_cards
 
         has_coords = lat is not None and lng is not None
         q = query.strip().lower() if query else ""
 
         rows = []
-        for biz in businesses:
-            if category and category not in (biz.categories or []):
+        for card in await cached_cards(self.db):
+            if category and category not in card["categories"]:
                 continue
-
-            services = [s for cat in (biz.service_categories or []) for s in (cat.services or [])]
-
-            if q:
-                haystack = " ".join([biz.name, *[s.name for s in services]]).lower()
-                if q not in haystack:
-                    continue
-
-            if price_max is not None and not any(s.price_amount <= price_max for s in services):
+            if q and q not in card["haystack"]:
                 continue
-
-            reviews = list(biz.reviews or [])
-            rating = round(sum(r.rating for r in reviews) / len(reviews), 1) if reviews else 0.0
-            if rating_min is not None and rating < rating_min:
+            if price_max is not None and not (card["prices"] and card["prices"][0] <= price_max):
                 continue
-
-            loc = biz.location or {}
-            biz_lat = loc.get("lat", 0.0)
-            biz_lng = loc.get("lng", 0.0)
-            distance = round(haversine_km(lat, lng, biz_lat, biz_lng), 1) if has_coords else 0.0
+            if rating_min is not None and card["rating"] < rating_min:
+                continue
+            distance = round(haversine_km(lat, lng, card["lat"], card["lng"]), 1) if has_coords else 0.0
             if has_coords and radius_km is not None and distance > radius_km:
                 continue
-
-            summary = business_summary(biz, distance)
-            published_ts = biz.published_at.timestamp() if biz.published_at else 0.0
-            rows.append((distance, published_ts, summary))
+            rows.append((distance, card["publishedTs"], card))
 
         if has_coords:
             rows.sort(key=lambda r: r[0])
         else:
             rows.sort(key=lambda r: r[1], reverse=True)
 
-        return SearchResponse(businesses=[r[2] for r in rows])
+        page = rows[offset:offset + limit] if limit is not None else rows[offset:]
+        return SearchResponse(businesses=[card_summary(c, d) for d, _, c in page], total=len(rows))
 
     # ─── Discovery: profile ────────────────────────────────────
 
@@ -1805,24 +1758,26 @@ class BusinessService:
                 selectinload(Business.service_categories).selectinload(ServiceCategory.services),
                 selectinload(Business.policies),
                 selectinload(Business.staff),
-                selectinload(Business.reviews),
             )
         )
         business = result.scalar_one_or_none()
         if not business:
             raise not_found
 
+        # Counted by the database, and only the latest few loaded: a popular business can have
+        # thousands of reviews ("See all" pages through GET /businesses/{id}/reviews).
+        review_count, review_avg = (await self.db.execute(
+            select(func.count(Review.id), func.avg(Review.rating)).where(Review.business_id == business.id)
+        )).one()
+        latest_reviews = (await self.db.execute(
+            select(Review).where(Review.business_id == business.id)
+            .order_by(Review.created_at.desc()).limit(PROFILE_REVIEWS)
+        )).scalars().all()
+
         loc = business.location or {}
         policies = business.policies
 
-        reviews_sorted = sorted(
-            business.reviews or [], key=lambda r: r.created_at, reverse=True
-        )
-        rating = (
-            round(sum(r.rating for r in reviews_sorted) / len(reviews_sorted), 1)
-            if reviews_sorted
-            else 0.0
-        )
+        rating = round(float(review_avg), 1) if review_count else 0.0
 
         photo_urls = [p.url for p in sorted(
             business.photos or [],
@@ -1881,7 +1836,7 @@ class BusinessService:
         # The latest few with full detail; "See all" pages through GET /businesses/{id}/reviews.
         from app.modules.booking.reviews import review_details
 
-        review_items = await review_details(self.db, reviews_sorted[:PROFILE_REVIEWS])
+        review_items = await review_details(self.db, list(latest_reviews))
 
         return BusinessProfileResponse(
             businessId=business.id,
@@ -1890,7 +1845,7 @@ class BusinessService:
             categories=business.categories or [],
             photos=photo_urls,
             rating=rating,
-            reviewCount=len(reviews_sorted),
+            reviewCount=review_count,
             address=loc.get("address", ""),
             lat=loc.get("lat", 0.0),
             lng=loc.get("lng", 0.0),

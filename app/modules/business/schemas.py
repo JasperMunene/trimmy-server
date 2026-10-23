@@ -459,6 +459,7 @@ class BusinessSummaryResponse(BaseModel):
 
 class SearchResponse(BaseModel):
     businesses: List[BusinessSummaryResponse]
+    total: Optional[int] = None  # matches before limit/offset
 
 
 # ─── Discovery: Profile ──────────────────────────────────────
