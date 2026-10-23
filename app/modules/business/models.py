@@ -348,5 +348,9 @@ class Review(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
+    # The business's public reply (owner or front desk), shown under the review.
+    reply_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    replied_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    replied_by: Mapped[Optional[uuid_pkg.UUID]] = mapped_column(UUID, nullable=True)
 
     business: Mapped["Business"] = relationship(back_populates="reviews")

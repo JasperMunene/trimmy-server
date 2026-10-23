@@ -129,6 +129,9 @@ class BookingReviewResponse(BaseModel):
     rating: int
     text: Optional[str] = None
     created_at: datetime = Field(alias="createdAt")
+    # The business's reply, once they've written one.
+    reply_text: Optional[str] = Field(None, alias="replyText")
+    replied_at: Optional[datetime] = Field(None, alias="repliedAt")
 
     model_config = {"populate_by_name": True}
 

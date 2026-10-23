@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import Literal, Optional, List
-from datetime import datetime
+from datetime import date, datetime
 import uuid as uuid_pkg
 
 
@@ -491,14 +491,47 @@ class StaffMemberResponse(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class ReviewReplyResponse(BaseModel):
+    text: str
+    replied_at: datetime = Field(alias="repliedAt")
+
+    model_config = {"populate_by_name": True}
+
+
 class ReviewResponse(BaseModel):
+    """A review with who wrote it, who did the service, what was done and when, and the
+    business's reply. Older reviews (before bookings were linked) lack staff and services."""
+
     review_id: uuid_pkg.UUID = Field(alias="reviewId")
     author_name: str = Field(alias="authorName")
+    author_avatar_url: Optional[str] = Field(None, alias="authorAvatarUrl")
     rating: int
     text: Optional[str] = None
     created_at: datetime = Field(alias="createdAt")
+    business_id: Optional[uuid_pkg.UUID] = Field(None, alias="businessId")
+    business_name: Optional[str] = Field(None, alias="businessName")
+    booking_id: Optional[uuid_pkg.UUID] = Field(None, alias="bookingId")
+    staff_id: Optional[uuid_pkg.UUID] = Field(None, alias="staffId")
+    staff_name: Optional[str] = Field(None, alias="staffName")
+    staff_avatar_url: Optional[str] = Field(None, alias="staffAvatarUrl")
+    services: List[str] = []
+    visit_date: Optional[date] = Field(None, alias="visitDate")
+    reply: Optional[ReviewReplyResponse] = None
 
     model_config = {"populate_by_name": True}
+
+
+class ListReviewsResponse(BaseModel):
+    reviews: List[ReviewResponse]
+    total: int
+    # The average over every review matching the filter (all of them, not just this page).
+    average_rating: float = Field(0.0, alias="averageRating")
+
+    model_config = {"populate_by_name": True}
+
+
+class ReviewReplyRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=1000)
 
 
 class DepositRuleResponse(BaseModel):

@@ -276,6 +276,9 @@ def business_summary(biz: Business, distance_km: float = 0.0) -> BusinessSummary
     )
 
 
+# Reviews included on a business profile; the rest are paged (GET /businesses/{id}/reviews).
+PROFILE_REVIEWS = 6
+
 # Commission for staff who don't say (the invite form's default). Desk-only members get none:
 # a percent sent for them (older app versions always send one) is ignored, not an error.
 DEFAULT_COMMISSION = 40
@@ -1875,16 +1878,10 @@ class BusinessService:
             for st in staff_rows
         ]
 
-        review_items = [
-            ReviewResponse(
-                reviewId=r.id,
-                authorName=r.author_name,
-                rating=r.rating,
-                text=r.text or "",
-                createdAt=r.created_at,
-            )
-            for r in reviews_sorted
-        ]
+        # The latest few with full detail; "See all" pages through GET /businesses/{id}/reviews.
+        from app.modules.booking.reviews import review_details
+
+        review_items = await review_details(self.db, reviews_sorted[:PROFILE_REVIEWS])
 
         return BusinessProfileResponse(
             businessId=business.id,
